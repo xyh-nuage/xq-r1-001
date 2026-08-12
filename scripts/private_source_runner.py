@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import math
 import os
 import pathlib
 import re
@@ -9,17 +10,9 @@ import sys
 import urllib.request
 
 
-PYTEST_COUNT_NAMES = (
-    "passed",
-    "failed",
-    "skipped",
-    "xfailed",
-    "xpassed",
-    "deselected",
-    "error",
-    "errors",
-)
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+SAFE_FIELD_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def run_quiet(args, *, cwd=None, env=None):
@@ -33,6 +26,16 @@ def safe_cwd(root: pathlib.Path, value: str | None) -> pathlib.Path:
     resolved = (root / pathlib.Path(*rel.parts)).resolve()
     if root.resolve() not in (resolved, *resolved.parents):
         raise ValueError("cwd escapes source root")
+    return resolved
+
+
+def safe_path(root: pathlib.Path, value: str) -> pathlib.Path:
+    rel = pathlib.PurePosixPath(value)
+    if not value or rel.is_absolute() or ".." in rel.parts:
+        raise ValueError("invalid path")
+    resolved = (root / pathlib.Path(*rel.parts)).resolve()
+    if root.resolve() not in resolved.parents:
+        raise ValueError("path escapes source root")
     return resolved
 
 
@@ -74,8 +77,6 @@ def parse_pytest_summary(log_path: pathlib.Path) -> dict[str, int] | None:
         matches = list(count_pattern.finditer(line))
         if not matches:
             continue
-        # A pytest terminal summary is a compact comma-separated count line and
-        # normally ends with a duration. Never print the original line.
         if " in " not in line and not line.startswith("="):
             continue
         result = {
@@ -99,14 +100,65 @@ def parse_pytest_summary(log_path: pathlib.Path) -> dict[str, int] | None:
     return None
 
 
-def print_pytest_summary(index: int, log_path: pathlib.Path) -> None:
+def print_pytest_summary(index: int, log_path: pathlib.Path) -> bool:
     summary = parse_pytest_summary(log_path)
     if summary is None:
         print(f"step_{index}_pytest_summary=UNAVAILABLE")
-        return
+        return False
     ordered = ("passed", "failed", "skipped", "xfailed", "xpassed", "deselected", "errors")
     payload = ",".join(f"{name}:{summary[name]}" for name in ordered)
     print(f"step_{index}_pytest_summary={payload}")
+    return True
+
+
+def normalize_metric(value, kind: str) -> str:
+    if kind == "int":
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError("invalid int metric")
+        return str(value)
+    if kind == "float":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("invalid float metric")
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("non-finite metric")
+        return format(number, ".12g")
+    if kind == "sha256":
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value.lower()) is None:
+            raise ValueError("invalid sha256 metric")
+        return value.lower()
+    raise ValueError("unsupported metric type")
+
+
+def print_numeric_json_audit(index: int, repo_dir: pathlib.Path, audit) -> bool:
+    if not isinstance(audit, dict) or audit.get("type") != "numeric_json":
+        print(f"step_{index}_audit=INVALID")
+        return False
+    path_value = audit.get("path")
+    fields = audit.get("fields")
+    if not isinstance(path_value, str) or not isinstance(fields, dict) or not fields:
+        print(f"step_{index}_audit=INVALID")
+        return False
+    try:
+        report_path = safe_path(repo_dir, path_value)
+        data = json.loads(report_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("report is not object")
+        rendered = []
+        for name, kind in fields.items():
+            if not isinstance(name, str) or SAFE_FIELD_RE.fullmatch(name) is None:
+                raise ValueError("unsafe metric name")
+            if kind not in ("int", "float", "sha256") or name not in data:
+                raise ValueError("invalid metric declaration")
+            rendered.append((name, normalize_metric(data[name], kind)))
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
+        print(f"step_{index}_audit=INVALID")
+        return False
+
+    for name, value in rendered:
+        print(f"step_{index}_metric_{name}={value}")
+    print(f"step_{index}_audit=PASS")
+    return True
 
 
 def main() -> int:
@@ -190,11 +242,21 @@ def main() -> int:
         log_path = logs / f"step-{index}.log"
         with log_path.open("wb") as fh:
             proc = subprocess.run(argv, cwd=cwd, env=env_base, stdout=fh, stderr=subprocess.STDOUT)
+
         if is_pytest_step(argv):
-            print_pytest_summary(index, log_path)
+            if not print_pytest_summary(index, log_path):
+                print(f"step_{index}=FAIL")
+                return 95
+
         if proc.returncode != 0:
             print(f"step_{index}=FAIL")
             return proc.returncode or 1
+
+        audit = step.get("audit")
+        if audit is not None and not print_numeric_json_audit(index, repo_dir, audit):
+            print(f"step_{index}=FAIL")
+            return 96
+
         print(f"step_{index}=PASS")
 
     print("REMOTE_PRIVATE_SOURCE_CI_PASS")
