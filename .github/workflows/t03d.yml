@@ -45,15 +45,6 @@ jobs:
           echo "value=$source" >> "$GITHUB_OUTPUT"
           echo "harness=$harness" >> "$GITHUB_OUTPUT"
 
-      - name: Require private result persistence credential
-        shell: bash
-        env:
-          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "$KNOWLEDGE_RESULTS_WRITE_TOKEN" || { echo 'PRIVATE_RESULTS_WRITE_CREDENTIAL_REQUIRED'; exit 86; }
-          echo 'private_result_persistence=READY'
-
       - name: Set up Python 3.11
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
@@ -67,6 +58,14 @@ jobs:
           git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
           git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Verify private result write access before model calls
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
 
       - name: Run Shared-only reviewed Gold20 diagnostic
         env:
@@ -113,5 +112,6 @@ jobs:
           rm -rf "$RUNNER_TEMP/private-eval-source" "$RUNNER_TEMP/private-eval-logs" "$RUNNER_TEMP/harness" \
                  "$RUNNER_TEMP/private-eval-askpass.sh" "$RUNNER_TEMP"/private-artifact-*.zip \
                  "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-askpass.sh" \
+                 "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-preflight-askpass.sh" \
                  "$RUNNER_TEMP/encrypted-private-output" "$RUNNER_TEMP/shared-private-diagnostic.zip" \
                  "$RUNNER_TEMP/shared-private-diagnostic.pass"
