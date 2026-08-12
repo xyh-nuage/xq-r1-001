@@ -3,9 +3,23 @@ import argparse
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import urllib.request
+
+
+PYTEST_COUNT_NAMES = (
+    "passed",
+    "failed",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "deselected",
+    "error",
+    "errors",
+)
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def run_quiet(args, *, cwd=None, env=None):
@@ -40,6 +54,59 @@ def resolve_private_repo(repo_id: str, token: str) -> str:
     if not isinstance(full_name, str) or "/" not in full_name or data.get("private") is not True:
         raise ValueError("private repository resolution failed")
     return full_name
+
+
+def is_pytest_step(argv: list[str]) -> bool:
+    return "pytest" in argv or any(part.endswith("/pytest") for part in argv)
+
+
+def parse_pytest_summary(log_path: pathlib.Path) -> dict[str, int] | None:
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    lines = text.splitlines()[-80:]
+    count_pattern = re.compile(
+        r"(?P<count>\d+)\s+(?P<name>passed|failed|skipped|xfailed|xpassed|deselected|errors?|warnings?)\b"
+    )
+    for raw_line in reversed(lines):
+        line = ANSI_RE.sub("", raw_line).strip()
+        matches = list(count_pattern.finditer(line))
+        if not matches:
+            continue
+        # A pytest terminal summary is a compact comma-separated count line and
+        # normally ends with a duration. Never print the original line.
+        if " in " not in line and not line.startswith("="):
+            continue
+        result = {
+            "passed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "xfailed": 0,
+            "xpassed": 0,
+            "deselected": 0,
+            "errors": 0,
+        }
+        for match in matches:
+            name = match.group("name")
+            if name in ("warning", "warnings"):
+                continue
+            if name == "error":
+                name = "errors"
+            result[name] += int(match.group("count"))
+        if any(result.values()):
+            return result
+    return None
+
+
+def print_pytest_summary(index: int, log_path: pathlib.Path) -> None:
+    summary = parse_pytest_summary(log_path)
+    if summary is None:
+        print(f"step_{index}_pytest_summary=UNAVAILABLE")
+        return
+    ordered = ("passed", "failed", "skipped", "xfailed", "xpassed", "deselected", "errors")
+    payload = ",".join(f"{name}:{summary[name]}" for name in ordered)
+    print(f"step_{index}_pytest_summary={payload}")
 
 
 def main() -> int:
@@ -123,6 +190,8 @@ def main() -> int:
         log_path = logs / f"step-{index}.log"
         with log_path.open("wb") as fh:
             proc = subprocess.run(argv, cwd=cwd, env=env_base, stdout=fh, stderr=subprocess.STDOUT)
+        if is_pytest_step(argv):
+            print_pytest_summary(index, log_path)
         if proc.returncode != 0:
             print(f"step_{index}=FAIL")
             return proc.returncode or 1
