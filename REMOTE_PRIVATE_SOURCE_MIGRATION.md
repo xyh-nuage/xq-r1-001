@@ -1,0 +1,1 @@
+Primary mode is now remote private-source validation. The public harness reads an exact private source commit using a read-only repository-scoped credential. Sealed payload mode remains a fallback only for inputs that cannot live in the private source repository.
