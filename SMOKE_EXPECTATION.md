@@ -1,0 +1,1 @@
+Before KNOWLEDGE_READ_TOKEN is configured, an owner request should pass rq validation and then stop at PRIVATE_SOURCE_CREDENTIAL_REQUIRED in the target workflow. This verifies the control chain without exposing private source.
