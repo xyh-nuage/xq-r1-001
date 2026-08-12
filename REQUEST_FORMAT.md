@@ -1,0 +1,1 @@
+Owner-only remote validation request format: rq:t01:<40-hex-sha>, rq:t02:<40-hex-sha>, or rq:t03:<40-hex-sha>. Requests are validated by an unprivileged workflow before any secret-bearing workflow can run.
