@@ -1,0 +1,47 @@
+name: verify-results-write
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-results-write.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify private results writer with dry-run push
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$KNOWLEDGE_RESULTS_WRITE_TOKEN" || { echo 'PRIVATE_RESULTS_WRITE_CREDENTIAL_REQUIRED'; exit 86; }
+          root="$RUNNER_TEMP/results-write-probe"
+          askpass="$RUNNER_TEMP/results-write-askpass.sh"
+          cat > "$askpass" <<'SH'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_RESULTS_WRITE_TOKEN" ;;
+          esac
+          SH
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          git init -q "$root"
+          git -C "$root" remote add origin https://github.com/xyh-nuage/knowledge.git
+          git -C "$root" fetch -q --depth=1 origin evaluation-results
+          git -C "$root" checkout -q --detach FETCH_HEAD
+          git -C "$root" config user.name remote-results-probe
+          git -C "$root" config user.email remote-results-probe@users.noreply.github.com
+          printf 'probe\n' > "$root/.results-write-probe"
+          git -C "$root" add -- .results-write-probe
+          git -C "$root" commit -q -m 'dry-run result writer probe'
+          git -C "$root" push --dry-run -q origin HEAD:refs/heads/evaluation-results
+          echo 'private_results_write_permission=PASS'
+          rm -rf "$root" "$askpass"
