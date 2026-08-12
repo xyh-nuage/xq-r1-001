@@ -27,27 +27,34 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Resolve source SHA
+      - name: Resolve source and harness SHAs
         id: source
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           DISPATCH_SHA: ${{ inputs.source_sha }}
           REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if [ "$EVENT_NAME" = "workflow_run" ]; then value="${REQUEST_TITLE#rq:t03:}"; else value="$DISPATCH_SHA"; fi
-          [[ "$value" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
-          echo "value=$value" >> "$GITHUB_OUTPUT"
+          if [ "$EVENT_NAME" = "workflow_run" ]; then source="${REQUEST_TITLE#rq:t03:}"; harness="$REQUEST_HARNESS_SHA"; else source="$DISPATCH_SHA"; harness="$CURRENT_HARNESS_SHA"; fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness_sha=INVALID'; exit 2; }
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
       - name: Set up Python 3.11
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.11'
-      - name: Checkout fixed public harness
+      - name: Checkout frozen public harness
         shell: bash
         run: |
           set -euo pipefail
-          git clone -q --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" "$RUNNER_TEMP/harness"
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
       - name: Validate exact private source
         env:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
