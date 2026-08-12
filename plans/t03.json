@@ -1,0 +1,1 @@
+{"schema":"remote_ci_plan.v1","steps":[{"argv":["python","-m","pytest","-q","l1/tests/test_shared_local_semantics.py","l1/tests/test_factorized_semantic_chat_only.py"]},{"argv":["python","-m","pytest","-q","l1/tests"]}]}
