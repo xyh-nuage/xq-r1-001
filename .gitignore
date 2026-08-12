@@ -1,0 +1,5 @@
+*.age
+*.tar
+*.zip
+*.db
+*.jsonl
