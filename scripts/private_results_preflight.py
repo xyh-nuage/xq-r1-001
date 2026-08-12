@@ -49,7 +49,13 @@ def main() -> int:
         run(["git", "init", "-q"], cwd=root, env=env)
         run(["git", "remote", "add", "origin", f"https://github.com/{TARGET_REPO}.git"], cwd=root, env=env)
         run(["git", "fetch", "-q", "--depth=1", "origin", TARGET_BRANCH], cwd=root, env=env)
-        run(["git", "push", "--dry-run", "-q", "origin", f"FETCH_HEAD:{TARGET_BRANCH}"], cwd=root, env=env)
+        run(["git", "checkout", "-q", "--detach", "FETCH_HEAD"], cwd=root, env=env)
+        run(["git", "config", "user.name", "remote-results-preflight"], cwd=root, env=env)
+        run(["git", "config", "user.email", "remote-results-preflight@users.noreply.github.com"], cwd=root, env=env)
+        (root / ".results-write-preflight").write_text("probe\n", encoding="utf-8")
+        run(["git", "add", "--", ".results-write-preflight"], cwd=root, env=env)
+        run(["git", "commit", "-q", "-m", "dry-run result writer preflight"], cwd=root, env=env)
+        run(["git", "push", "--dry-run", "-q", "origin", f"HEAD:refs/heads/{TARGET_BRANCH}"], cwd=root, env=env)
         print("PRIVATE_RESULTS_WRITE_PREFLIGHT_PASS")
         return 0
     except Exception:
