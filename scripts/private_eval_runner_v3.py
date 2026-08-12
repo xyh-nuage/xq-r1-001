@@ -70,20 +70,9 @@ def encrypt_bundle(
         )
     subprocess.run(
         [
-            "openssl",
-            "pkeyutl",
-            "-encrypt",
-            "-pubin",
-            "-inkey",
-            str(public_key),
-            "-pkeyopt",
-            "rsa_padding_mode:oaep",
-            "-pkeyopt",
-            "rsa_oaep_md:sha256",
-            "-in",
-            str(passfile),
-            "-out",
-            str(encrypted_key),
+            "openssl", "pkeyutl", "-encrypt", "-pubin", "-inkey", str(public_key),
+            "-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256",
+            "-in", str(passfile), "-out", str(encrypted_key),
         ],
         check=True,
         stdout=subprocess.DEVNULL,
@@ -91,19 +80,8 @@ def encrypt_bundle(
     )
     subprocess.run(
         [
-            "openssl",
-            "enc",
-            "-aes-256-cbc",
-            "-salt",
-            "-pbkdf2",
-            "-iter",
-            "200000",
-            "-in",
-            str(plain_zip),
-            "-out",
-            str(encrypted_payload),
-            "-pass",
-            f"file:{passfile}",
+            "openssl", "enc", "-aes-256-cbc", "-salt", "-pbkdf2", "-iter", "200000",
+            "-in", str(plain_zip), "-out", str(encrypted_payload), "-pass", f"file:{passfile}",
         ],
         check=True,
         stdout=subprocess.DEVNULL,
@@ -243,17 +221,21 @@ def main() -> int:
             return 96
         print(f"step_{index}=PASS")
 
-    try:
-        encrypt_bundle(
-            plan.get("encrypted_bundle"),
-            source_root=source_root,
-            harness_root=harness_root,
-            temp=temp,
-            source_sha=source_sha,
-        )
-    except Exception:
-        print("ENCRYPTED_BUNDLE_FAILED")
-        return 99
+    encrypted_spec = plan.get("encrypted_bundle")
+    if encrypted_spec is not None:
+        try:
+            encrypt_bundle(
+                encrypted_spec,
+                source_root=source_root,
+                harness_root=harness_root,
+                temp=temp,
+                source_sha=source_sha,
+            )
+        except Exception:
+            print("ENCRYPTED_BUNDLE_FAILED")
+            return 99
+    else:
+        print("encrypted_bundle=SKIPPED")
 
     print("REMOTE_PRIVATE_EVAL_PASS")
     return 0
