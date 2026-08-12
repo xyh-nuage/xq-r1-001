@@ -1,0 +1,26 @@
+name: rq
+run-name: ${{ github.event.issue.title }}
+
+on:
+  issues:
+    types: [opened, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate owner request
+        shell: bash
+        env:
+          REQUEST_AUTHOR: ${{ github.event.issue.user.login }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REQUEST_TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -euo pipefail
+          test "$REQUEST_AUTHOR" = "$REPOSITORY_OWNER" || { echo 'request=REJECTED'; exit 2; }
+          [[ "$REQUEST_TITLE" =~ ^rq:t0(1|2|3):[0-9a-f]{40}$ ]] || { echo 'request=INVALID'; exit 2; }
+          echo 'request=ACCEPTED'
