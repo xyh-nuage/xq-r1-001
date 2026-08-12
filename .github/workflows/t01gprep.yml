@@ -49,6 +49,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install synthetic guard-test dependency
+        shell: bash
+        run: python -m pip install --disable-pip-version-check --quiet pytest==8.4.1
+
       - name: Checkout frozen public harness
         shell: bash
         run: |
