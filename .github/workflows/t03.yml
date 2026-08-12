@@ -3,83 +3,44 @@ name: t03
 on:
   workflow_dispatch:
     inputs:
-      payload_ref:
-        description: opaque payload ref
+      source_sha:
+        description: exact private source commit
         required: true
-        type: string
-      ciphertext_sha256:
-        description: expected ciphertext sha256
-        required: true
+        default: cef2572dceddcab02f2cc18f35c9e4dbfe3469c8
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: sealed-t03
+  group: remote-t03
   cancel-in-progress: false
 
 jobs:
   run:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: t03
+    timeout-minutes: 45
     steps:
-      - name: prepare
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Checkout fixed public harness
         shell: bash
+        run: |
+          set -euo pipefail
+          git clone -q --depth=1 "https://github.com/${GITHUB_REPOSITORY}.git" "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+      - name: Validate exact private source
         env:
-          PAYLOAD_REF: ${{ inputs.payload_ref }}
-          EXPECTED_CIPHERTEXT: ${{ inputs.ciphertext_sha256 }}
-        run: |
-          set -euo pipefail
-          [[ "$PAYLOAD_REF" =~ ^p/[0-9A-Fa-f-]{36}$ ]] || { echo 'payload_ref=INVALID'; exit 2; }
-          [[ "$EXPECTED_CIPHERTEXT" =~ ^[0-9a-f]{64}$ ]] || { echo 'ciphertext=INVALID'; exit 2; }
-          sudo apt-get update -qq >/dev/null
-          sudo apt-get install -y -qq age >/dev/null
-          git clone --quiet --depth 1 --branch main "https://github.com/${GITHUB_REPOSITORY}.git" "$RUNNER_TEMP/h"
-          python -m pip install --disable-pip-version-check --no-input -q -r "$RUNNER_TEMP/h/deps/t03.txt"
-          git init -q "$RUNNER_TEMP/p"
-          git -C "$RUNNER_TEMP/p" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          git -C "$RUNNER_TEMP/p" fetch --quiet --depth=1 origin "refs/heads/${PAYLOAD_REF}"
-          git -C "$RUNNER_TEMP/p" show FETCH_HEAD:bundle.age > "$RUNNER_TEMP/bundle.age"
-          git -C "$RUNNER_TEMP/p" show FETCH_HEAD:binding.json > "$RUNNER_TEMP/binding.json"
-          python "$RUNNER_TEMP/h/scripts/sealed_runner.py" verify-binding \
-            --binding "$RUNNER_TEMP/binding.json" \
-            --ciphertext "$RUNNER_TEMP/bundle.age" \
-            --target t03 \
-            --expected-ciphertext "$EXPECTED_CIPHERTEXT"
-
-      - name: decrypt
-        shell: bash
-        env:
-          SEALED_INPUT_IDENTITY: ${{ secrets.SEALED_INPUT_IDENTITY }}
-        run: |
-          set -euo pipefail
-          test -n "$SEALED_INPUT_IDENTITY" || { echo 'identity=MISSING'; exit 2; }
-          umask 077
-          printf '%s\n' "$SEALED_INPUT_IDENTITY" > "$RUNNER_TEMP/identity.txt"
-          if ! age -d -i "$RUNNER_TEMP/identity.txt" -o "$RUNNER_TEMP/bundle.tar" "$RUNNER_TEMP/bundle.age" >"$RUNNER_TEMP/decrypt.log" 2>&1; then
-            echo 'decrypt=FAIL'
-            exit 2
-          fi
-          rm -f "$RUNNER_TEMP/identity.txt"
-          python "$RUNNER_TEMP/h/scripts/sealed_runner.py" verify-archive \
-            --binding "$RUNNER_TEMP/binding.json" --archive "$RUNNER_TEMP/bundle.tar"
-          mkdir -p "$RUNNER_TEMP/x"
-          python "$RUNNER_TEMP/h/scripts/sealed_runner.py" extract \
-            --archive "$RUNNER_TEMP/bundle.tar" --dest "$RUNNER_TEMP/x"
-          rm -f "$RUNNER_TEMP/bundle.tar" "$RUNNER_TEMP/decrypt.log"
-
-      - name: execute
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          python "$RUNNER_TEMP/h/scripts/sealed_runner.py" run --root "$RUNNER_TEMP/x" --target t03
-
-      - name: cleanup
+          python "$RUNNER_TEMP/harness/scripts/private_source_runner.py" --source-sha "${{ inputs.source_sha }}" --plan "$RUNNER_TEMP/harness/plans/t03.json"
+      - name: Cleanup
         if: always()
         shell: bash
-        run: |
-          rm -rf "$RUNNER_TEMP/identity.txt" "$RUNNER_TEMP/bundle.tar" "$RUNNER_TEMP/bundle.age" \
-                 "$RUNNER_TEMP/binding.json" "$RUNNER_TEMP/decrypt.log" "$RUNNER_TEMP/x" \
-                 "$RUNNER_TEMP/p" "$RUNNER_TEMP/h" "$RUNNER_TEMP/sealed-logs"
+        run: rm -rf "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/private-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/knowledge-askpass.sh"
