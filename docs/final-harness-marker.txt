@@ -1,0 +1,3 @@
+auditable_harness=v2
+pytest_summary=required
+numeric_json=enabled
