@@ -1,0 +1,1 @@
+{"schema":"remote_ci_plan.v1","steps":[{"argv":["python","-m","pytest","-q","context/tests/test_matter_inline_quote_recall.py","context/tests/test_matter_window.py","context/tests/test_matter_real_db.py"]},{"argv":["python","-m","pytest","-q","l0/tests","l1/tests","context/tests"]}]}
