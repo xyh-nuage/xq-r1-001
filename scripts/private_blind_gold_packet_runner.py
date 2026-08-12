@@ -97,6 +97,9 @@ def main() -> int:
             capture=True,
         )
         if test_cp.returncode != 0:
+            # This suite is synthetic-only and runs before real packet generation.
+            # Printing its failure output cannot expose unseen message bodies.
+            print(test_cp.stdout or "blind Gold synthetic pytest produced no output")
             print("blind_gold_packet_tests=FAIL")
             return 21
         match = PASSED.search(test_cp.stdout or "")
@@ -120,6 +123,8 @@ def main() -> int:
             capture=True,
         )
         if gen_cp.returncode != 0:
+            # Real packet generation may have opened unseen bodies in-process, so
+            # its captured output is deliberately never printed publicly.
             print("blind_gold_packet_generation=FAIL")
             return 23
 
