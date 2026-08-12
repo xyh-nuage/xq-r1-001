@@ -71,7 +71,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python "$RUNNER_TEMP/harness/scripts/private_eval_runner.py" --source-sha "${{ steps.source.outputs.value }}" --plan "$RUNNER_TEMP/harness/plans/t03m.json"
+          python "$RUNNER_TEMP/harness/scripts/private_eval_runner_v2.py" --source-sha "${{ steps.source.outputs.value }}" --plan "$RUNNER_TEMP/harness/plans/t03m.json"
       - name: Cleanup
         if: always()
         shell: bash
