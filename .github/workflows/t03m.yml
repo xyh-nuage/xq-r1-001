@@ -24,7 +24,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t03m:'))
-    environment: t03m
+    environment: llm-deepseek
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -59,15 +59,15 @@ jobs:
       - name: Run exact private Shared Gold20 evaluation
         env:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
-          L1_LLM_API_KEY: ${{ secrets.L1_LLM_API_KEY || secrets.SEALED_MODEL_SECRET_1 }}
-          L1_LLM_BASE_URL: ${{ secrets.L1_LLM_BASE_URL || secrets.SEALED_MODEL_SECRET_2 }}
-          L1_LLM_MODEL: ${{ secrets.L1_LLM_MODEL || secrets.SEALED_MODEL_SECRET_3 }}
-          L1_LLM_TIMEOUT_SECONDS: ${{ vars.L1_LLM_TIMEOUT_SECONDS || '60' }}
-          L1_LLM_MAX_RETRIES: ${{ vars.L1_LLM_MAX_RETRIES || '2' }}
-          L1_LLM_RETRY_BACKOFF_SECONDS: ${{ vars.L1_LLM_RETRY_BACKOFF_SECONDS || '1' }}
-          L1_LLM_MAX_COMPLETION_TOKENS: ${{ vars.L1_LLM_MAX_COMPLETION_TOKENS || '3000' }}
-          L1_LLM_MAX_COMPLETION_FIELD: ${{ vars.L1_LLM_MAX_COMPLETION_FIELD || 'max_tokens' }}
-          L1_LLM_DISABLE_REASONING: ${{ secrets.L1_LLM_DISABLE_REASONING || secrets.SEALED_MODEL_SECRET_4 || vars.L1_LLM_DISABLE_REASONING || 'true' }}
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY || secrets.L1_LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || secrets.L1_LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL || secrets.L1_LLM_MODEL }}
+          L1_LLM_TIMEOUT_SECONDS: ${{ vars.LLM_TIMEOUT_SECONDS || vars.L1_LLM_TIMEOUT_SECONDS || '60' }}
+          L1_LLM_MAX_RETRIES: ${{ vars.LLM_MAX_RETRIES || vars.L1_LLM_MAX_RETRIES || '2' }}
+          L1_LLM_RETRY_BACKOFF_SECONDS: ${{ vars.LLM_RETRY_BACKOFF_SECONDS || vars.L1_LLM_RETRY_BACKOFF_SECONDS || '1' }}
+          L1_LLM_MAX_COMPLETION_TOKENS: ${{ vars.LLM_MAX_COMPLETION_TOKENS || vars.L1_LLM_MAX_COMPLETION_TOKENS || '3000' }}
+          L1_LLM_MAX_COMPLETION_FIELD: ${{ vars.LLM_MAX_COMPLETION_FIELD || vars.L1_LLM_MAX_COMPLETION_FIELD || 'max_tokens' }}
+          L1_LLM_DISABLE_REASONING: ${{ secrets.LLM_DISABLE_REASONING || secrets.L1_LLM_DISABLE_REASONING || vars.LLM_DISABLE_REASONING || vars.L1_LLM_DISABLE_REASONING || 'true' }}
         shell: bash
         run: |
           set -euo pipefail
