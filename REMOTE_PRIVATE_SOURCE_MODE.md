@@ -1,0 +1,1 @@
+This repository uses a public CI runner as a validation harness. Private source is fetched at an exact commit using a read-only credential supplied through GitHub Actions secrets or environments. No private source or real data is stored in this public repository.
