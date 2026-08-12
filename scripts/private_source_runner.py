@@ -5,6 +5,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import urllib.request
 
 
 def run_quiet(args, *, cwd=None, env=None):
@@ -21,11 +22,31 @@ def safe_cwd(root: pathlib.Path, value: str | None) -> pathlib.Path:
     return resolved
 
 
+def resolve_private_repo(repo_id: str, token: str) -> str:
+    if not repo_id.isdigit():
+        raise ValueError("invalid repository id")
+    req = urllib.request.Request(
+        f"https://api.github.com/repositories/{repo_id}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "remote-ci-harness",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=20) as response:
+        data = json.load(response)
+    full_name = data.get("full_name")
+    if not isinstance(full_name, str) or "/" not in full_name or data.get("private") is not True:
+        raise ValueError("private repository resolution failed")
+    return full_name
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--source-sha", required=True)
     p.add_argument("--plan", required=True)
-    p.add_argument("--repo", default="xyh-nuage/knowledge")
+    p.add_argument("--repo-id", default="1307326607")
     p.add_argument("--token-env", default="KNOWLEDGE_READ_TOKEN")
     ns = p.parse_args()
 
@@ -42,9 +63,15 @@ def main() -> int:
         print("INVALID_PLAN")
         return 88
 
+    try:
+        private_repo = resolve_private_repo(ns.repo_id, token)
+    except Exception:
+        print("PRIVATE_SOURCE_RESOLUTION_FAILED")
+        return 93
+
     temp = pathlib.Path(os.environ.get("RUNNER_TEMP", "/tmp"))
     root = temp / "private-source"
-    repo_dir = root / "knowledge"
+    repo_dir = root / "source"
     logs = temp / "private-source-logs"
     root.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
@@ -52,9 +79,9 @@ def main() -> int:
     env_base = os.environ.copy()
     env_base["GIT_TERMINAL_PROMPT"] = "0"
     run_quiet(["git", "init", "-q", str(repo_dir)], env=env_base)
-    run_quiet(["git", "-C", str(repo_dir), "remote", "add", "origin", f"https://github.com/{ns.repo}.git"], env=env_base)
+    run_quiet(["git", "-C", str(repo_dir), "remote", "add", "origin", f"https://github.com/{private_repo}.git"], env=env_base)
 
-    askpass = temp / "knowledge-askpass.sh"
+    askpass = temp / "private-source-askpass.sh"
     askpass.write_text(
         "#!/bin/sh\ncase \"$1\" in\n  *Username*) printf '%s\\n' x-access-token ;;\n  *Password*) printf '%s\\n' \"$KNOWLEDGE_READ_TOKEN\" ;;\nesac\n",
         encoding="utf-8",
