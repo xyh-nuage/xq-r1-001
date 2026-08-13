@@ -75,6 +75,11 @@ def main() -> int:
             "--output", str(out),
         ], cwd=source, env=os.environ.copy(), capture=True)
         if cp.returncode != 0 or not out.is_file():
+            diagnostic = (cp.stdout or "").strip()
+            if diagnostic:
+                print("generator_diagnostic_begin")
+                print(diagnostic[:6000])
+                print("generator_diagnostic_end")
             print("FINAL_GOLD_GENERATION_FAILED"); return 23
         obj = json.loads(out.read_text(encoding="utf-8"))
         if obj.get("status") != "FROZEN" or int(obj.get("sample_size", -1)) != 80:
@@ -90,8 +95,8 @@ def main() -> int:
         print("final_gold_sha256=" + hashlib.sha256(data).hexdigest())
         print("FINAL_GOLD_REMOTE_PASS")
         return 0
-    except Exception:
-        print("FINAL_GOLD_REMOTE_FAILED"); return 24
+    except Exception as exc:
+        print(f"FINAL_GOLD_REMOTE_FAILED:{type(exc).__name__}:{exc}"); return 24
     finally:
         env.pop("KNOWLEDGE_READ_TOKEN", None); askpass.unlink(missing_ok=True)
 
