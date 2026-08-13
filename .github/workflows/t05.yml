@@ -148,6 +148,17 @@ jobs:
             --fixture-sha "4d514701e01308129a76c609d23fe51a0ec92249" \
             --output-dir "$RUNNER_TEMP/spreadsheet-audit"
 
+      - name: Run deterministic preview coverage audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/harness/scripts/run_spreadsheet_coverage_audit.py" \
+            --implementation-root "$RUNNER_TEMP/private-impl" \
+            --fixture-root "$RUNNER_TEMP/private-fixtures/media_fixtures" \
+            --implementation-sha "${{ steps.source.outputs.value }}" \
+            --fixture-sha "4d514701e01308129a76c609d23fe51a0ec92249" \
+            --output-dir "$RUNNER_TEMP/spreadsheet-audit"
+
       - name: Persist detailed spreadsheet audit privately
         shell: bash
         env:
@@ -163,7 +174,9 @@ jobs:
             --date "$eval_date" \
             --evaluation "spreadsheet_fixture_audit" \
             --copy "summary.json=summary.json" \
-            --copy "details.json=details.json"
+            --copy "details.json=details.json" \
+            --copy "coverage_summary.json=coverage_summary.json" \
+            --copy "coverage_details.json=coverage_details.json"
 
       - name: Cleanup
         if: always()

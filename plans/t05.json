@@ -1,5 +1,5 @@
 {
-  "schema": "spreadsheet_fixture_audit_plan.v1",
+  "schema": "spreadsheet_fixture_audit_plan.v2",
   "target": "t05",
   "track": "shared_infrastructure_diagnostic",
   "mode": "deterministic_no_llm",
@@ -7,14 +7,17 @@
   "implementation_sha": "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29",
   "fixture_source_sha": "4d514701e01308129a76c609d23fe51a0ec92249",
   "fixture_path": "media_fixtures",
-  "extensions": [
-    ".xls",
-    ".xlsx",
-    ".xlsm"
-  ],
+  "extensions": [".xls", ".xlsx", ".xlsm"],
   "outputs": [
     "summary.json",
-    "details.json"
+    "details.json",
+    "coverage_summary.json",
+    "coverage_details.json"
+  ],
+  "coverage_questions": [
+    "detected table blocks omitted by preview row window",
+    "visible sheets omitted by preview sheet window",
+    "hidden sheets occupying processed preview slots"
   ],
   "public_output": "aggregate_counts_and_hashes_only",
   "private_result_evaluation": "spreadsheet_fixture_audit",
