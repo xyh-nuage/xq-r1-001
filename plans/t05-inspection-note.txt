@@ -1,0 +1,1 @@
+Representative spreadsheet preview inspection is deterministic, no-LLM, private-output only. It inspects structurally selected cases from the sealed fixture commit and does not change private source code or semantics.
