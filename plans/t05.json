@@ -6,7 +6,7 @@
   "mode": "deterministic_no_llm",
   "source_repository": "xyh-nuage/knowledge",
   "base_sha": "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29",
-  "implementation_sha": "b3f18ebfea72eab5d57b8311f7d82b83700dd03a",
+  "implementation_sha": "66f33db182b98948e730db9d2daeeed041f36a6b",
   "implementation_branch": "fix/l1-spreadsheet-structure-001",
   "fixture_source_sha": "4d514701e01308129a76c609d23fe51a0ec92249",
   "fixture_path": "media_fixtures",
@@ -16,6 +16,7 @@
     "llm_calls_forbidden": true,
     "full_row_values_forbidden": true,
     "complete_sheet_and_column_schema_required": true,
+    "hidden_sheet_columns_excluded_from_semantic_schema": true,
     "sample_rows_per_table_max": 2,
     "artifact_event_promotion_change_forbidden": true,
     "candidate_taxonomy_context_change_forbidden": true
@@ -34,6 +35,7 @@
     "26-column logistics schema recovered",
     "all 9 PORT LINE-UP sheets represented including 7 visible sheets",
     "hidden-sheet row samples empty",
+    "hidden-sheet columns do not expand business-facing semantic schema",
     "all table row samples bounded to at most 2"
   ],
   "outputs": ["summary.json", "details.json"],
