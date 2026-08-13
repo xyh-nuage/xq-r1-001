@@ -1,26 +1,44 @@
 {
-  "schema": "spreadsheet_fixture_audit_plan.v2",
+  "schema": "l1_spreadsheet_structure_validation.v1",
   "target": "t05",
-  "track": "shared_infrastructure_diagnostic",
+  "track": "shared_l1_attachment_structure",
+  "task_id": "L1-SPREADSHEET-SOURCE-STRUCTURE-001",
   "mode": "deterministic_no_llm",
   "source_repository": "xyh-nuage/knowledge",
-  "implementation_sha": "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29",
+  "base_sha": "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29",
+  "implementation_sha": "b3f18ebfea72eab5d57b8311f7d82b83700dd03a",
+  "implementation_branch": "fix/l1-spreadsheet-structure-001",
   "fixture_source_sha": "4d514701e01308129a76c609d23fe51a0ec92249",
   "fixture_path": "media_fixtures",
   "extensions": [".xls", ".xlsx", ".xlsm"],
-  "outputs": [
-    "summary.json",
-    "details.json",
-    "coverage_summary.json",
-    "coverage_details.json"
+  "constraints": {
+    "l0_changes_forbidden": true,
+    "llm_calls_forbidden": true,
+    "full_row_values_forbidden": true,
+    "complete_sheet_and_column_schema_required": true,
+    "sample_rows_per_table_max": 2,
+    "artifact_event_promotion_change_forbidden": true,
+    "candidate_taxonomy_context_change_forbidden": true
+  },
+  "pytest": {
+    "targeted": [
+      "l1/tests/test_artifact_spreadsheet_source_structure.py",
+      "l1/tests/test_artifact_table_semantics.py",
+      "l1/tests/test_artifact_attachment_chain_v11.py"
+    ],
+    "full_suite": "l1/tests"
+  },
+  "real_fixture_checks": [
+    "92 spreadsheet files read deterministically",
+    "37-column inventory schema recovered",
+    "26-column logistics schema recovered",
+    "all 9 PORT LINE-UP sheets represented including 7 visible sheets",
+    "hidden-sheet row samples empty",
+    "all table row samples bounded to at most 2"
   ],
-  "coverage_questions": [
-    "detected table blocks omitted by preview row window",
-    "visible sheets omitted by preview sheet window",
-    "hidden sheets occupying processed preview slots"
-  ],
+  "outputs": ["summary.json", "details.json"],
   "public_output": "aggregate_counts_and_hashes_only",
-  "private_result_evaluation": "spreadsheet_fixture_audit",
+  "private_result_evaluation": "l1_spreadsheet_source_structure",
   "semantic_changes": false,
-  "reviewer_gate_effect": "DIAGNOSTIC_ONLY"
+  "reviewer_gate_effect": "VALIDATION_ONLY_SHARED_REVIEW_STILL_REQUIRED"
 }
