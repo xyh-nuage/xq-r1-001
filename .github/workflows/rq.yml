@@ -22,5 +22,5 @@ jobs:
         run: |
           set -euo pipefail
           test "$REQUEST_AUTHOR" = "$REPOSITORY_OWNER" || { echo 'request=REJECTED'; exit 2; }
-          [[ "$REQUEST_TITLE" =~ ^rq:t0(1|1c|1m|1gprep|1adj|2|3|3m|3d|3h|3r|4):[0-9a-f]{40}$ ]] || { echo 'request=INVALID'; exit 2; }
+          [[ "$REQUEST_TITLE" =~ ^rq:t0(1|1c|1m|1gprep|1adj|1gold|2|3|3m|3d|3h|3r|4):[0-9a-f]{40}$ ]] || { echo 'request=INVALID'; exit 2; }
           echo 'request=ACCEPTED'
