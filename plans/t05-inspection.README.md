@@ -1,0 +1,1 @@
+This diagnostic exists only to inspect structurally selected spreadsheet preview omissions. Business cell contents are persisted only to the private knowledge evaluation-results branch; public logs emit category/count information only.
