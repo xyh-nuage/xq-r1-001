@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       source_sha:
-        description: exact private spreadsheet implementation commit
+        description: exact private L1 spreadsheet-structure implementation commit
         required: true
-        default: 23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29
+        default: b3f18ebfea72eab5d57b8311f7d82b83700dd03a
         type: string
   workflow_run:
     workflows: [rq]
@@ -25,7 +25,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t05:'))
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Resolve source and harness SHAs
         id: source
@@ -47,6 +47,7 @@ jobs:
           fi
           [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 2
           [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          test "$source" = "b3f18ebfea72eab5d57b8311f7d82b83700dd03a"
           echo "value=$source" >> "$GITHUB_OUTPUT"
           echo "harness=$harness" >> "$GITHUB_OUTPUT"
 
@@ -63,7 +64,7 @@ jobs:
           git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
           git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
 
-      - name: Verify sealed spreadsheet audit plan
+      - name: Verify sealed no-LLM plan
         shell: bash
         run: |
           set -euo pipefail
@@ -74,12 +75,16 @@ jobs:
           plan = json.load(open(plan_path, encoding="utf-8"))
           assert plan["target"] == "t05"
           assert plan["mode"] == "deterministic_no_llm"
-          assert plan["implementation_sha"] == source == "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29"
+          assert plan["implementation_sha"] == source == "b3f18ebfea72eab5d57b8311f7d82b83700dd03a"
+          assert plan["base_sha"] == "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29"
           assert plan["fixture_source_sha"] == "4d514701e01308129a76c609d23fe51a0ec92249"
+          assert plan["constraints"]["l0_changes_forbidden"] is True
+          assert plan["constraints"]["llm_calls_forbidden"] is True
+          assert plan["constraints"]["full_row_values_forbidden"] is True
           assert plan["semantic_changes"] is False
           print("plan=SEALED")
-          print(f"implementation_sha={source}")
-          print(f"fixture_source_sha={plan['fixture_source_sha']}")
+          print(f"source_sha={source}")
+          print("model_calls=FORBIDDEN")
           PY
 
       - name: Verify private result write access
@@ -88,11 +93,12 @@ jobs:
           KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
         run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
 
-      - name: Checkout exact private implementation and fixtures
+      - name: Checkout exact private source and fixtures
         shell: bash
         env:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
           SOURCE_SHA: ${{ steps.source.outputs.value }}
+          BASE_SHA: 23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29
           FIXTURE_SHA: 4d514701e01308129a76c609d23fe51a0ec92249
         run: |
           set -euo pipefail
@@ -110,11 +116,13 @@ jobs:
           export GIT_ASKPASS="$askpass"
           repo="https://github.com/xyh-nuage/knowledge.git"
 
-          git init -q "$RUNNER_TEMP/private-impl"
-          git -C "$RUNNER_TEMP/private-impl" remote add origin "$repo"
-          git -C "$RUNNER_TEMP/private-impl" fetch -q --depth=1 origin "$SOURCE_SHA"
-          test "$(git -C "$RUNNER_TEMP/private-impl" rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
-          git -C "$RUNNER_TEMP/private-impl" checkout -q --detach FETCH_HEAD
+          git init -q "$RUNNER_TEMP/private-source"
+          git -C "$RUNNER_TEMP/private-source" remote add origin "$repo"
+          git -C "$RUNNER_TEMP/private-source" fetch -q --depth=1 origin "$SOURCE_SHA"
+          test "$(git -C "$RUNNER_TEMP/private-source" rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          git -C "$RUNNER_TEMP/private-source" checkout -q --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/private-source" fetch -q --depth=1 origin "$BASE_SHA"
+          test "$(git -C "$RUNNER_TEMP/private-source" rev-parse FETCH_HEAD)" = "$BASE_SHA"
 
           git init -q "$RUNNER_TEMP/private-fixtures"
           git -C "$RUNNER_TEMP/private-fixtures" remote add origin "$repo"
@@ -125,50 +133,67 @@ jobs:
           rm -f "$askpass"
           echo "private_checkouts=PASS"
 
-      - name: Install frozen L0 dependencies
+      - name: Enforce no L0 changes
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.value }}
+          BASE_SHA: 23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29
+        run: |
+          set -euo pipefail
+          changed="$RUNNER_TEMP/changed-files.txt"
+          git -C "$RUNNER_TEMP/private-source" diff --name-only "$BASE_SHA" "$SOURCE_SHA" > "$changed"
+          test -s "$changed"
+          if grep -E '^l0/' "$changed" >/dev/null; then
+            echo 'l0_changes=FORBIDDEN_FOUND'
+            exit 2
+          fi
+          non_l1="$(grep -Ev '^l1/' "$changed" || true)"
+          test -z "$non_l1" || { echo 'non_l1_changes=FORBIDDEN_FOUND'; exit 2; }
+          echo "changed_files=$(wc -l < "$changed" | tr -d ' ')"
+          echo 'l0_changes=0'
+          echo 'change_scope=L1_ONLY'
+
+      - name: Install L1 with deterministic spreadsheet readers
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install -q -e "$RUNNER_TEMP/private-impl/l0[dev]"
+          python -m pip install -q -e "$RUNNER_TEMP/private-source/l1[dev]"
           python - <<'PY'
           import openpyxl, xlrd
           print(f"openpyxl={openpyxl.__version__}")
           print(f"xlrd={xlrd.__version__}")
           PY
 
-      - name: Run deterministic spreadsheet fixture audit
+      - name: Run targeted deterministic tests
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/spreadsheet-audit"
-          python "$RUNNER_TEMP/harness/scripts/run_spreadsheet_fixture_audit.py" \
-            --implementation-root "$RUNNER_TEMP/private-impl" \
+          cd "$RUNNER_TEMP/private-source"
+          python -m pytest -q \
+            l1/tests/test_artifact_spreadsheet_source_structure.py \
+            l1/tests/test_artifact_table_semantics.py \
+            l1/tests/test_artifact_attachment_chain_v11.py
+
+      - name: Run full L1 suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/private-source"
+          python -m pytest -q l1/tests
+
+      - name: Run 92-file source-structure audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/l1-spreadsheet-audit"
+          python "$RUNNER_TEMP/harness/scripts/run_l1_spreadsheet_structure_audit.py" \
+            --implementation-root "$RUNNER_TEMP/private-source" \
             --fixture-root "$RUNNER_TEMP/private-fixtures/media_fixtures" \
-            --implementation-sha "${{ steps.source.outputs.value }}" \
+            --source-sha "${{ steps.source.outputs.value }}" \
             --fixture-sha "4d514701e01308129a76c609d23fe51a0ec92249" \
-            --output-dir "$RUNNER_TEMP/spreadsheet-audit"
+            --output-dir "$RUNNER_TEMP/l1-spreadsheet-audit"
 
-      - name: Run deterministic preview coverage audit
-        shell: bash
-        run: |
-          set -euo pipefail
-          python "$RUNNER_TEMP/harness/scripts/run_spreadsheet_coverage_audit.py" \
-            --implementation-root "$RUNNER_TEMP/private-impl" \
-            --fixture-root "$RUNNER_TEMP/private-fixtures/media_fixtures" \
-            --implementation-sha "${{ steps.source.outputs.value }}" \
-            --fixture-sha "4d514701e01308129a76c609d23fe51a0ec92249" \
-            --output-dir "$RUNNER_TEMP/spreadsheet-audit"
-
-      - name: Inspect representative preview cases privately
-        shell: bash
-        run: |
-          set -euo pipefail
-          python "$RUNNER_TEMP/harness/scripts/inspect_spreadsheet_preview_cases.py" \
-            --implementation-root "$RUNNER_TEMP/private-impl" \
-            --fixture-root "$RUNNER_TEMP/private-fixtures/media_fixtures" \
-            --output-dir "$RUNNER_TEMP/spreadsheet-audit"
-
-      - name: Persist detailed spreadsheet audit privately
+      - name: Persist audit privately
         shell: bash
         env:
           KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
@@ -176,22 +201,27 @@ jobs:
           set -euo pipefail
           eval_date="$(date -u +%F)"
           python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
-            --source-root "$RUNNER_TEMP/spreadsheet-audit" \
+            --source-root "$RUNNER_TEMP/l1-spreadsheet-audit" \
             --source-sha "${{ steps.source.outputs.value }}" \
             --harness-sha "${{ steps.source.outputs.harness }}" \
             --run-id "${{ github.run_id }}" \
             --date "$eval_date" \
-            --evaluation "spreadsheet_fixture_audit" \
+            --evaluation "l1_spreadsheet_source_structure" \
             --copy "summary.json=summary.json" \
-            --copy "details.json=details.json" \
-            --copy "coverage_summary.json=coverage_summary.json" \
-            --copy "coverage_details.json=coverage_details.json" \
-            --copy "inspection.json=inspection.json"
+            --copy "details.json=details.json"
+
+      - name: Terminal marker
+        shell: bash
+        run: |
+          echo 'model_calls=0'
+          echo 'l0_changes=0'
+          echo 'L1_SPREADSHEET_STRUCTURE_VALIDATION_PASS'
 
       - name: Cleanup
         if: always()
         shell: bash
         run: |
-          rm -rf "$RUNNER_TEMP/private-impl" "$RUNNER_TEMP/private-fixtures" \
-            "$RUNNER_TEMP/spreadsheet-audit" "$RUNNER_TEMP/harness" \
-            "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight"
+          rm -rf "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/private-fixtures" \
+            "$RUNNER_TEMP/l1-spreadsheet-audit" "$RUNNER_TEMP/harness" \
+            "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" \
+            "$RUNNER_TEMP/changed-files.txt"
