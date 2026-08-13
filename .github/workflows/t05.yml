@@ -6,7 +6,7 @@ on:
       source_sha:
         description: exact private L1 spreadsheet-structure implementation commit
         required: true
-        default: b3f18ebfea72eab5d57b8311f7d82b83700dd03a
+        default: 66f33db182b98948e730db9d2daeeed041f36a6b
         type: string
   workflow_run:
     workflows: [rq]
@@ -47,7 +47,7 @@ jobs:
           fi
           [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 2
           [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || exit 2
-          test "$source" = "b3f18ebfea72eab5d57b8311f7d82b83700dd03a"
+          test "$source" = "66f33db182b98948e730db9d2daeeed041f36a6b"
           echo "value=$source" >> "$GITHUB_OUTPUT"
           echo "harness=$harness" >> "$GITHUB_OUTPUT"
 
@@ -75,12 +75,13 @@ jobs:
           plan = json.load(open(plan_path, encoding="utf-8"))
           assert plan["target"] == "t05"
           assert plan["mode"] == "deterministic_no_llm"
-          assert plan["implementation_sha"] == source == "b3f18ebfea72eab5d57b8311f7d82b83700dd03a"
+          assert plan["implementation_sha"] == source == "66f33db182b98948e730db9d2daeeed041f36a6b"
           assert plan["base_sha"] == "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29"
           assert plan["fixture_source_sha"] == "4d514701e01308129a76c609d23fe51a0ec92249"
           assert plan["constraints"]["l0_changes_forbidden"] is True
           assert plan["constraints"]["llm_calls_forbidden"] is True
           assert plan["constraints"]["full_row_values_forbidden"] is True
+          assert plan["constraints"]["hidden_sheet_columns_excluded_from_semantic_schema"] is True
           assert plan["semantic_changes"] is False
           print("plan=SEALED")
           print(f"source_sha={source}")
