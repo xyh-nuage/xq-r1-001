@@ -99,7 +99,7 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --date "$eval_date" \
             --evaluation "company_c2_raw_context_slice_a_v2" \
-            --copy "runtime_company_c2_slice_a/output/RUN.json=RUN.json" \
+            --copy "runtime_company_c2_slice_a/output/RUN.json=evaluation_RUN.json" \
             --copy "runtime_company_c2_slice_a/output/summary.json=summary.json" \
             --copy "runtime_company_c2_slice_a/output/predictions.jsonl=predictions.jsonl" \
             --copy "runtime_company_c2_slice_a/output/matters.jsonl=matters.jsonl" \
