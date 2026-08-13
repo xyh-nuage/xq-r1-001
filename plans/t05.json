@@ -1,0 +1,23 @@
+{
+  "schema": "spreadsheet_fixture_audit_plan.v1",
+  "target": "t05",
+  "track": "shared_infrastructure_diagnostic",
+  "mode": "deterministic_no_llm",
+  "source_repository": "xyh-nuage/knowledge",
+  "implementation_sha": "23c63a6b0e50cd2fbbd530b3a3c6afa02a556e29",
+  "fixture_source_sha": "4d514701e01308129a76c609d23fe51a0ec92249",
+  "fixture_path": "media_fixtures",
+  "extensions": [
+    ".xls",
+    ".xlsx",
+    ".xlsm"
+  ],
+  "outputs": [
+    "summary.json",
+    "details.json"
+  ],
+  "public_output": "aggregate_counts_and_hashes_only",
+  "private_result_evaluation": "spreadsheet_fixture_audit",
+  "semantic_changes": false,
+  "reviewer_gate_effect": "DIAGNOSTIC_ONLY"
+}
