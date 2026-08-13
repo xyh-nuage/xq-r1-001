@@ -1,0 +1,85 @@
+name: t01gold
+
+on:
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-t01gold
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.display_title, 'rq:t01gold:')
+    environment: deepseek
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve exact source and harness
+        id: source
+        shell: bash
+        env:
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          source="${REQUEST_TITLE#rq:t01gold:}"
+          harness="$REQUEST_HARNESS_SHA"
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Verify private result write access
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
+
+      - name: Freeze final Gold privately
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_final_gold_freeze_runner.py" --source-sha "${{ steps.source.outputs.value }}"
+
+      - name: Persist final Gold privately
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          eval_date="$(date -u +%F)"
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$RUNNER_TEMP/private-final-gold/source" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation "l1_chat_unseen_final_gold" \
+            --copy "l1/evaluation/unseen/gold_adjudication_record.v1.json=gold_adjudication_record.v1.json" \
+            --copy "l1/evaluation/unseen/gold_construction_contract.v2.json=gold_construction_contract.v2.json" \
+            --copy "l1/evaluation/unseen/.runtime/final_gold/final_gold.v1.json=final_gold.v1.json"
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/private-final-gold" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight"
