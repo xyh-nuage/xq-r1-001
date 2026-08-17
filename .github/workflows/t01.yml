@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: remote-t01
+  group: remote-t01-detail-a
   cancel-in-progress: false
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t01:'))
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 60
     steps:
       - name: Resolve source and harness SHAs
         id: source
