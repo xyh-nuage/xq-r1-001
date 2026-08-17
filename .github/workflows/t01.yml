@@ -62,6 +62,14 @@ jobs:
         run: |
           set -euo pipefail
           python "$RUNNER_TEMP/harness/scripts/private_source_runner.py" --source-sha "${{ steps.source.outputs.value }}" --plan "$RUNNER_TEMP/harness/plans/t01.json"
+      - name: Upload encrypted pilot detail
+        if: success()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: encrypted-pilot-detail-${{ steps.source.outputs.value }}
+          path: ${{ runner.temp }}/private-source/source/l1/evaluation/vnext/runtime/research_matter_reconstruction_pilot_detail.encrypted.b64
+          if-no-files-found: ignore
+          retention-days: 1
       - name: Cleanup
         if: always()
         shell: bash
