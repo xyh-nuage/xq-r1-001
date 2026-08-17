@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: remote-t01-detail-a
+  group: remote-t01-detail-b
   cancel-in-progress: false
 
 jobs:
