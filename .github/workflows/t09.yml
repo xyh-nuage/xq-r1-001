@@ -93,7 +93,7 @@ jobs:
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/private-source/source"
-          base="l1/evaluation/vnext/runtime/slice_a_l1_attachment_materialization"
+          base="l1/evaluation/vnext/runtime/slice_a_l1_attachment_materialization/materialized"
           test -f "$root/$base/materialization_manifest.json"
           test -f "$root/$base/summary.json"
           test -f "$root/$base/candidate_db_export.json"
