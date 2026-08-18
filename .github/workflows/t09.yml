@@ -13,7 +13,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: remote-t09-${{ github.event.workflow_run.head_sha || github.run_id }}
@@ -25,16 +24,8 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t09:'))
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
-      - name: Publish run locator only
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh issue create --repo "${{ github.repository }}" --title "t09-run:${{ github.run_id }}" --body "Safe attachment-Gold probe run locator only. No company data."
-
       - name: Resolve source and harness SHAs
         id: source
         shell: bash
@@ -72,7 +63,13 @@ jobs:
           git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
           git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
 
-      - name: Run safe attachment probe
+      - name: Verify private result write access
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
+
+      - name: Materialize deterministic Slice A L1 attachment evidence
         env:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
         shell: bash
@@ -80,7 +77,36 @@ jobs:
           set -euo pipefail
           python "$RUNNER_TEMP/harness/scripts/private_source_runner.py" --source-sha "${{ steps.source.outputs.value }}" --plan "$RUNNER_TEMP/harness/plans/t09.json"
 
+      - name: Persist private structured materialization result
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/private-source/source"
+          base="l1/evaluation/vnext/runtime/slice_a_l1_attachment_materialization"
+          test -f "$root/$base/materialization_manifest.json"
+          test -f "$root/$base/summary.json"
+          test -f "$root/$base/candidate_db_export.json"
+          test -f "$root/$base/attachment_replay.jsonl"
+          test -f "$root/$base/attachment_sanity.json"
+          test -f "$root/$base/flat.json"
+          eval_date="$(date -u +%F)"
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$root" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation "research_slice_a_l1_attachment_materialization" \
+            --copy "$base/materialization_manifest.json=materialization_manifest.json" \
+            --copy "$base/summary.json=summary.json" \
+            --copy "$base/candidate_db_export.json=candidate_db_export.json" \
+            --copy "$base/attachment_replay.jsonl=attachment_replay.jsonl" \
+            --copy "$base/attachment_sanity.json=attachment_sanity.json" \
+            --copy "$base/flat.json=flat.json"
+
       - name: Cleanup
         if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/private-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/private-source-askpass.sh"
+        run: rm -rf "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/private-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/private-source-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
