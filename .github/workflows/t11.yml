@@ -1,0 +1,171 @@
+name: t11
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: exact private source commit
+        required: true
+        type: string
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: remote-t11-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t11:'))
+    environment: deepseek
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "${{ github.repository }}" --title "t11-incremental-matter-run:${{ github.run_id }}" --body "Safe run locator for Research stateful incremental Matter replay. No company content."
+
+      - name: Resolve source and harness SHAs
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            source="${REQUEST_TITLE#rq:t11:}"
+            harness="$REQUEST_HARNESS_SHA"
+          else
+            source="$DISPATCH_SHA"
+            harness="$CURRENT_HARNESS_SHA"
+          fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness_sha=INVALID'; exit 2; }
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Verify private result write access
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
+
+      - name: Prepare exact private source and persisted L1 input
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/incremental-matter-source"
+          repo="$root/source"
+          result_commit="67389cf13187e1c768808f268173437a13552e1e"
+          result_path="evaluation_results/research_slice_a_l1_attachment_materialization/2026-08-18_0c2adfff_run32096296005/candidate_db_export.json"
+          expected_blob="9b95be232e3a500931f2faf03c5a238dc475c641"
+          mkdir -p "$root"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t11-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          git -C "$repo" fetch -q --depth=1 origin "$result_commit"
+          input_dir="$repo/l1/evaluation/vnext/runtime/incremental_matter_input"
+          mkdir -p "$input_dir"
+          git -C "$repo" show "$result_commit:$result_path" > "$input_dir/candidate_db_export.json"
+          test "$(git hash-object "$input_dir/candidate_db_export.json")" = "$expected_blob"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'persisted_l1_input=VERIFIED'
+
+      - name: Run stateful incremental Matter replay
+        shell: bash
+        env:
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY || secrets.L1_LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || secrets.L1_LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL || secrets.L1_LLM_MODEL }}
+          L1_LLM_TIMEOUT_SECONDS: '90'
+          L1_LLM_MAX_RETRIES: '2'
+          L1_LLM_RETRY_BACKOFF_SECONDS: '1'
+          L1_LLM_MAX_COMPLETION_TOKENS: '3000'
+          L1_LLM_MAX_COMPLETION_FIELD: 'max_tokens'
+          L1_LLM_DISABLE_REASONING: 'true'
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/harness/scripts/prepared_source_runner.py" \
+            --source-dir "$RUNNER_TEMP/incremental-matter-source/source" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --plan "$RUNNER_TEMP/harness/plans/t11.json"
+
+      - name: Persist private incremental Matter result
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/incremental-matter-source/source"
+          base="l1/evaluation/vnext/runtime/research_c_stage_incremental_matter"
+          input="l1/evaluation/vnext/runtime/incremental_matter_input"
+          for file in summary.json final_registry.json transition_log.jsonl posthoc_evaluation.json attachment_demand_map.json failure_attribution.json flat.json; do
+            test -f "$root/$base/$file"
+          done
+          test -f "$root/$input/rehydration_summary.json"
+          eval_date="$(date -u +%F)"
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$root" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation "research_c_stage_incremental_matter" \
+            --copy "$base/summary.json=summary.json" \
+            --copy "$base/final_registry.json=final_registry.json" \
+            --copy "$base/transition_log.jsonl=transition_log.jsonl" \
+            --copy "$base/posthoc_evaluation.json=posthoc_evaluation.json" \
+            --copy "$base/attachment_demand_map.json=attachment_demand_map.json" \
+            --copy "$base/failure_attribution.json=failure_attribution.json" \
+            --copy "$base/flat.json=flat.json" \
+            --copy "$input/rehydration_summary.json=rehydration_summary.json"
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/incremental-matter-source" "$RUNNER_TEMP/prepared-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/t11-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
