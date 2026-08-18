@@ -1,0 +1,115 @@
+name: t20
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: exact private source commit
+        required: true
+        type: string
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: remote-t20-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t20:'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "${{ github.repository }}" --title "t20-c-stage-decision-semantics-contract-run:${{ github.run_id }}" --body "Safe run locator for C-stage decision-semantics contract validation. No company content."
+
+      - name: Resolve source and harness SHAs
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            source="${REQUEST_TITLE#rq:t20:}"
+            harness="$REQUEST_HARNESS_SHA"
+          else
+            source="$DISPATCH_SHA"
+            harness="$CURRENT_HARNESS_SHA"
+          fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness_sha=INVALID'; exit 2; }
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Prepare exact private source
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/c-stage-decision-source"
+          repo="$root/source"
+          mkdir -p "$root"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t20-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+
+      - name: Run C-stage decision-semantics contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/harness/scripts/prepared_source_runner.py" \
+            --source-dir "$RUNNER_TEMP/c-stage-decision-source/source" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --plan "$RUNNER_TEMP/harness/plans/t20.json"
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/c-stage-decision-source" "$RUNNER_TEMP/prepared-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/t20-read-askpass.sh"
