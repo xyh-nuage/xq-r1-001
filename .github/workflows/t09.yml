@@ -99,6 +99,7 @@ jobs:
           test -f "$root/$base/candidate_db_export.json"
           test -f "$root/$base/attachment_replay.jsonl"
           test -f "$root/$base/attachment_sanity.json"
+          test -f "$root/$base/rehydration_summary.json"
           test -f "$root/$base/flat.json"
           eval_date="$(date -u +%F)"
           python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
@@ -113,6 +114,7 @@ jobs:
             --copy "$base/candidate_db_export.json=candidate_db_export.json" \
             --copy "$base/attachment_replay.jsonl=attachment_replay.jsonl" \
             --copy "$base/attachment_sanity.json=attachment_sanity.json" \
+            --copy "$base/rehydration_summary.json=rehydration_summary.json" \
             --copy "$base/flat.json=flat.json"
 
       - name: Cleanup
