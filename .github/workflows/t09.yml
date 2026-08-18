@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: remote-t09-${{ github.event.workflow_run.head_sha || github.run_id }}
@@ -26,6 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "${{ github.repository }}" --title "t09-materialization-run:${{ github.run_id }}" --body "Safe run locator for deterministic Slice A L1 attachment materialization. No company content."
+
       - name: Resolve source and harness SHAs
         id: source
         shell: bash
