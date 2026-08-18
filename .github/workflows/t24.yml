@@ -121,7 +121,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/later-evidence-source/source"
-          python -m pip install -q -e './l1[dev]'
+          python -m pip install -q cryptography -e './l1[dev]'
           python -m pytest -q l1/tests/test_research_c_stage_later_evidence_diagnostic.py
 
       - name: Run D-stage later-evidence diagnostic
