@@ -24,6 +24,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t01:'))
+    environment: deepseek
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -55,22 +56,66 @@ jobs:
           git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
           git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
           git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+      - name: Verify optional private result write access
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
       - name: Validate exact private source
         env:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY || secrets.L1_LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || secrets.L1_LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL || secrets.L1_LLM_MODEL }}
+          L1_LLM_TIMEOUT_SECONDS: ${{ vars.LLM_TIMEOUT_SECONDS || vars.L1_LLM_TIMEOUT_SECONDS || '60' }}
+          L1_LLM_MAX_RETRIES: ${{ vars.LLM_MAX_RETRIES || vars.L1_LLM_MAX_RETRIES || '2' }}
+          L1_LLM_RETRY_BACKOFF_SECONDS: ${{ vars.LLM_RETRY_BACKOFF_SECONDS || vars.L1_LLM_RETRY_BACKOFF_SECONDS || '1' }}
+          L1_LLM_MAX_COMPLETION_TOKENS: ${{ vars.LLM_MAX_COMPLETION_TOKENS || vars.L1_LLM_MAX_COMPLETION_TOKENS || '3000' }}
+          L1_LLM_MAX_COMPLETION_FIELD: ${{ vars.LLM_MAX_COMPLETION_FIELD || vars.L1_LLM_MAX_COMPLETION_FIELD || 'max_tokens' }}
+          L1_LLM_DISABLE_REASONING: ${{ secrets.LLM_DISABLE_REASONING || secrets.L1_LLM_DISABLE_REASONING || vars.LLM_DISABLE_REASONING || vars.L1_LLM_DISABLE_REASONING || 'true' }}
         shell: bash
         run: |
           set -euo pipefail
           python "$RUNNER_TEMP/harness/scripts/private_source_runner.py" --source-sha "${{ steps.source.outputs.value }}" --plan "$RUNNER_TEMP/harness/plans/t01.json"
-      - name: Upload encrypted pilot detail
+      - name: Persist sanitized L1-evidence Matter result when present
+        if: success()
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/private-source/source"
+          result="l1/evaluation/vnext/runtime/research_matter_reconstruction_l1_evidence_result.json"
+          flat="l1/evaluation/vnext/runtime/research_matter_reconstruction_l1_evidence_flat.json"
+          if [ ! -f "$root/$result" ]; then
+            echo "private_result=SKIPPED_NOT_PRESENT"
+            exit 0
+          fi
+          eval_date="$(date -u +%F)"
+          args=(
+            --source-root "$root"
+            --source-sha "${{ steps.source.outputs.value }}"
+            --harness-sha "${{ steps.source.outputs.harness }}"
+            --run-id "${{ github.run_id }}"
+            --date "$eval_date"
+            --evaluation "research_matter_reconstruction_l1_evidence"
+            --copy "$result=result.json"
+          )
+          if [ -f "$root/$flat" ]; then
+            args+=(--copy "$flat=flat.json")
+          fi
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" "${args[@]}"
+      - name: Upload encrypted Matter reviewer detail
         if: success()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: encrypted-pilot-detail-${{ steps.source.outputs.value }}-${{ steps.source.outputs.harness }}
-          path: ${{ runner.temp }}/private-source/source/l1/evaluation/vnext/runtime/research_matter_reconstruction_pilot_detail.encrypted.b64
+          name: encrypted-matter-detail-${{ steps.source.outputs.value }}-${{ steps.source.outputs.harness }}
+          path: |
+            ${{ runner.temp }}/private-source/source/l1/evaluation/vnext/runtime/research_matter_reconstruction_l1_evidence_detail.encrypted.b64
+            ${{ runner.temp }}/private-source/source/l1/evaluation/vnext/runtime/research_matter_reconstruction_pilot_detail.encrypted.b64
           if-no-files-found: ignore
           retention-days: 1
       - name: Cleanup
         if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/private-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/private-source-askpass.sh"
+        run: rm -rf "$RUNNER_TEMP/private-source" "$RUNNER_TEMP/private-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/private-source-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
