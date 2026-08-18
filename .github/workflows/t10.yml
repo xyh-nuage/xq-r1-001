@@ -145,7 +145,6 @@ jobs:
           base="l1/evaluation/vnext/runtime/research_matter_message_first"
           input="l1/evaluation/vnext/runtime/message_first_input"
           test -f "$root/$base/summary.json"
-          test -f "$root/$base/detail.json"
           test -f "$root/$base/failure_attribution.json"
           test -f "$root/$base/attachment_demand_map.json"
           test -f "$root/$base/flat.json"
@@ -159,7 +158,6 @@ jobs:
             --date "$eval_date" \
             --evaluation "research_matter_reconstruction_message_first" \
             --copy "$base/summary.json=summary.json" \
-            --copy "$base/detail.json=detail.json" \
             --copy "$base/failure_attribution.json=failure_attribution.json" \
             --copy "$base/attachment_demand_map.json=attachment_demand_map.json" \
             --copy "$base/flat.json=flat.json" \
