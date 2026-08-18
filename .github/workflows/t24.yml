@@ -116,6 +116,14 @@ jobs:
           unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
           echo 't23_causal_diagnostics=VERIFIED_IMMUTABLE_INPUT'
 
+      - name: Diagnose D-stage deterministic test gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/later-evidence-source/source"
+          python -m pip install -q -e './l1[dev]'
+          python -m pytest -q l1/tests/test_research_c_stage_later_evidence_diagnostic.py
+
       - name: Run D-stage later-evidence diagnostic
         shell: bash
         env:
