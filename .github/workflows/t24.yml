@@ -134,7 +134,7 @@ jobs:
           L1_LLM_TIMEOUT_SECONDS: '90'
           L1_LLM_MAX_RETRIES: '2'
           L1_LLM_RETRY_BACKOFF_SECONDS: '1'
-          L1_LLM_MAX_COMPLETION_TOKENS: '2000'
+          L1_LLM_MAX_COMPLETION_TOKENS: '2048'
           L1_LLM_MAX_COMPLETION_FIELD: max_tokens
           L1_LLM_DISABLE_REASONING: 'true'
         run: |
