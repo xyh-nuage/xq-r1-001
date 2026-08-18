@@ -1,0 +1,1 @@
+{"schema":"remote_ci_plan.v1","steps":[{"argv":["python","-m","pip","install","-e","./l1[dev]"]},{"argv":["python","-m","pytest","-q","l1/tests/test_research_c_stage_context_sufficiency_review.py"]}]}
