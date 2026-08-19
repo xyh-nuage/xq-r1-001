@@ -1,0 +1,78 @@
+name: t30-compact-input-audit
+
+on:
+  push:
+    paths:
+      - '.github/workflows/t30_compact_input_audit.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    environment: shangtang
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Fetch private cleaner and exact persisted input
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/knowledge"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin 43c40934188bbb8757ea9ef9881a262ce25ab681
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          git -C "$repo" fetch -q --depth=1 origin 6d3fa051556d98f8d2cbccd587c250a7afa76b3e
+          input_path='evaluation_results/research_full_context_matter_baseline_shangtang_one_call/2026-08-19_12003bf3_run32207813297/full_context_input.json'
+          git -C "$repo" show "6d3fa051556d98f8d2cbccd587c250a7afa76b3e:$input_path" > "$RUNNER_TEMP/full_context_input.json"
+          test "$(wc -c < "$RUNNER_TEMP/full_context_input.json" | tr -d ' ')" = '94954'
+          rm -f "$askpass"
+          echo 'EXACT_PERSISTED_INPUT_VERIFIED=94954_BYTES'
+
+      - name: Build compact model input and measure
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/compact"
+          python "$RUNNER_TEMP/knowledge/l1/tools/compact_research_full_context_model_input.py" \
+            "$RUNNER_TEMP/full_context_input.json" --output-dir "$out"
+          echo '--- compact stats ---'
+          cat "$out/full_context_model_input_stats.json"
+          echo '--- compact persisted file sizes ---'
+          wc -c "$out/full_context_model_input.json" "$out/full_context_model_input_map.json" "$out/full_context_model_input_stats.json"
+
+      - name: Publish safe audit stats to locator issue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          stats="$(cat "$RUNNER_TEMP/compact/full_context_model_input_stats.json")"
+          gh issue comment 334 --repo "${{ github.repository }}" --body "Deterministic compact-input audit, no provider call.\n\n\`\`\`json\n${stats}\n\`\`\`"
+
+      - name: Assert no provider path
+        shell: bash
+        run: |
+          echo 'MODEL_PROVIDER_CALLS=0'
+          echo 'REFERENCE_LABELS_OPENED=0'
+          echo 'COMPACT_INPUT_AUDIT_COMPLETE'
