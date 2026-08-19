@@ -1,0 +1,19 @@
+name: t57-status
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t57_status.yml']
+permissions:
+  contents: read
+  actions: read
+  issues: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report t57 run state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow t57_immutable_second35_medium8000_backoff.yml --limit 1 --json databaseId,status,conclusion,createdAt,updatedAt,headSha)"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "t57-status:${GITHUB_RUN_ID}" --body "$body"
