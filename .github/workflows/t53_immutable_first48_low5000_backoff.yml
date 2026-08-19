@@ -1,0 +1,66 @@
+name: t53-immutable-first48-low5000-backoff
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t53_immutable_first48_low5000_backoff.yml']
+permissions:
+  contents: read
+  issues: write
+jobs:
+  run:
+    environment: shangtang
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout harness
+        run: |
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "$GITHUB_SHA"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+      - name: Fetch immutable packet
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          ask="$RUNNER_TEMP/askpass.sh"
+          printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *Password*) echo "$KNOWLEDGE_READ_TOKEN";; esac\n' > "$ask"
+          chmod 700 "$ask"
+          export GIT_ASKPASS="$ask" GIT_TERMINAL_PROMPT=0
+          root="$RUNNER_TEMP/source"
+          git init -q "$root"
+          git -C "$root" remote add origin https://github.com/xyh-nuage/knowledge.git
+          git -C "$root" fetch -q --depth=1 origin 5093c76e39b66aea3d2e34943e268449e0e878b1
+          git -C "$root" checkout -q --detach FETCH_HEAD
+          git -C "$root" fetch -q --depth=1 origin adc39b93942724160892bd05605310e80915fdda
+          base='evaluation_results/full_context_first48_file_names_only_packet_probe/2026-08-19_5093c76e_run32225512706'
+          mkdir -p "$RUNNER_TEMP/input" "$root/l1/evaluation/vnext/runtime/t53"
+          git -C "$root" show adc39b93942724160892bd05605310e80915fdda:"$base/human_context_packet.txt" > "$RUNNER_TEMP/input/packet.txt"
+          git -C "$root" show adc39b93942724160892bd05605310e80915fdda:"$base/human_context_system_prompt.txt" > "$RUNNER_TEMP/input/prompt.txt"
+          test "$(git hash-object "$RUNNER_TEMP/input/packet.txt")" = 30fc6bf64f38170b64493fb224b90c7f475ba797
+          test "$(git hash-object "$RUNNER_TEMP/input/prompt.txt")" = dd7dad0b793ee0d52744e271bb648525519cf6d8
+          cp "$RUNNER_TEMP/input/packet.txt" "$root/l1/evaluation/vnext/runtime/t53/human_context_packet.txt"
+          cp "$RUNNER_TEMP/input/prompt.txt" "$root/l1/evaluation/vnext/runtime/t53/human_context_system_prompt.txt"
+      - name: Run DeepSeek low5000 with exponential backoff
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          SOURCE_SHA: 5093c76e39b66aea3d2e34943e268449e0e878b1
+          PACKET_SOURCE_COMMIT: adc39b93942724160892bd05605310e80915fdda
+        run: |
+          set +e
+          python "$RUNNER_TEMP/harness/scripts/t53_shangtang_immutable_first48_low5000_backoff.py" "$RUNNER_TEMP/input/packet.txt" "$RUNNER_TEMP/input/prompt.txt" "$RUNNER_TEMP/source/l1/evaluation/vnext/runtime/t53" | tee "$RUNNER_TEMP/t53.log"
+          exit 0
+      - name: Persist result
+        if: always()
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          if [ -f "$RUNNER_TEMP/source/l1/evaluation/vnext/runtime/t53/full_context_raw_result.json" ]; then
+            python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" --source-root "$RUNNER_TEMP/source" --source-sha 5093c76e39b66aea3d2e34943e268449e0e878b1 --harness-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --date "$(date -u +%F)" --evaluation full_context_immutable_first48_low5000_t53_backoff --copy l1/evaluation/vnext/runtime/t53/human_context_packet.txt=human_context_packet.txt --copy l1/evaluation/vnext/runtime/t53/human_context_system_prompt.txt=human_context_system_prompt.txt --copy l1/evaluation/vnext/runtime/t53/full_context_raw_result.json=full_context_raw_result.json
+          fi
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue create --repo "$GITHUB_REPOSITORY" --title "t53-immutable-first48-low5000-backoff:${GITHUB_RUN_ID}" --body "$(cat "$RUNNER_TEMP/t53.log" 2>/dev/null || true)"
