@@ -31,10 +31,13 @@ jobs:
           git -C "$root" checkout -q --detach FETCH_HEAD
           test "$(git -C "$root" rev-parse HEAD)" = 6dc7fbb7d1d23a28cb38a647a7594e2884e3acf1
       - name: Frozen-boundary diff gate
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
         run: |
           set -euo pipefail
           root="$RUNNER_TEMP/source"
-          export GIT_TERMINAL_PROMPT=0
+          ask="$RUNNER_TEMP/askpass.sh"
+          export GIT_ASKPASS="$ask" GIT_TERMINAL_PROMPT=0
           git -C "$root" fetch -q --depth=1 origin 5093c76e39b66aea3d2e34943e268449e0e878b1
           if git -C "$root" diff --name-only 5093c76e39b66aea3d2e34943e268449e0e878b1..6dc7fbb7d1d23a28cb38a647a7594e2884e3acf1 -- l1/l1_processor/local_semantics/ | grep -q .; then
             echo FROZEN_LOCAL_SEMANTICS_CHANGED
