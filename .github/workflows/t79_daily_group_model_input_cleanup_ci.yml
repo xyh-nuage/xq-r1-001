@@ -44,6 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install -q pytest
           cd private-knowledge
           python -m py_compile l1/tools/prepare_research_daily_group_model_inputs.py
           python -m pytest -q l1/tests/test_prepare_research_daily_group_model_inputs.py
