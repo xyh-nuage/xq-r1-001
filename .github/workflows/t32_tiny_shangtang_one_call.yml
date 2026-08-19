@@ -1,0 +1,122 @@
+name: t32-tiny-shangtang-one-call
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/t32_tiny_shangtang_one_call.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  run:
+    if: github.event.head_commit.message == 'ci: authorize one tiny shangtang call'
+    environment: shangtang
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Enforce one-run authorization boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_RUN_ATTEMPT}" = "1" || { echo 'AUTHORIZATION_CONSUMED_NO_RERUN'; exit 90; }
+
+      - name: Resolve model and verify config without provider call
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL_SECRET: ${{ secrets.LLM_MODEL }}
+          LLM_MODEL_VAR: ${{ vars.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          test -n "$LLM_API_KEY" || { echo 'LLM_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
+          if [ -n "$LLM_MODEL_SECRET" ]; then
+            echo "LLM_MODEL=$LLM_MODEL_SECRET" >> "$GITHUB_ENV"
+          elif [ -n "$LLM_MODEL_VAR" ]; then
+            echo "LLM_MODEL=$LLM_MODEL_VAR" >> "$GITHUB_ENV"
+          else
+            echo 'LLM_MODEL=MISSING_NO_MODEL_CALL'; exit 2
+          fi
+          echo 'github_environment=shangtang'
+          echo 'provider_base_url=https://token.sensenova.cn/v1/'
+          echo 'CONFIG_PRESENT_NO_PROVIDER_CALL_YET'
+
+      - name: Execute exactly one tiny Shangtang HTTP call
+        id: probe
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          set +e
+          python - <<'PY' | tee "$RUNNER_TEMP/t32-probe.log"
+          import json, os, urllib.request, urllib.error
+
+          url = 'https://token.sensenova.cn/v1/chat/completions'
+          payload = {
+              'model': os.environ['LLM_MODEL'],
+              'messages': [{'role': 'user', 'content': 'Reply with exactly: ok'}],
+              'temperature': 0,
+              'max_tokens': 8,
+              'stream': False,
+          }
+          body = json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+          req = urllib.request.Request(
+              url,
+              data=body,
+              headers={
+                  'Authorization': 'Bearer ' + os.environ['LLM_API_KEY'],
+                  'Content-Type': 'application/json',
+              },
+              method='POST',
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=30) as resp:  # exactly one provider HTTP request
+                  raw = resp.read().decode('utf-8', errors='replace')
+                  print('TINY_CALL_STATUS=HTTP_' + str(resp.status))
+                  print('REQUEST_BYTES=' + str(len(body)))
+                  print('X_REQUEST_ID=' + str(resp.headers.get('x-request-id') or ''))
+                  for key in ('x-ratelimit-limit-requests','x-ratelimit-remaining-requests','x-ratelimit-reset-requests','x-ratelimit-limit-tokens','x-ratelimit-remaining-tokens','x-ratelimit-reset-tokens'):
+                      value = resp.headers.get(key)
+                      if value is not None:
+                          print(key.upper().replace('-', '_') + '=' + value)
+                  try:
+                      obj = json.loads(raw)
+                      usage = obj.get('usage') or {}
+                      print('PROMPT_TOKENS=' + str(usage.get('prompt_tokens','')))
+                      print('COMPLETION_TOKENS=' + str(usage.get('completion_tokens','')))
+                      print('TOTAL_TOKENS=' + str(usage.get('total_tokens','')))
+                      content = (((obj.get('choices') or [{}])[0].get('message') or {}).get('content'))
+                      print('RESPONSE_CONTENT=' + json.dumps(content, ensure_ascii=False))
+                  except Exception:
+                      print('RESPONSE_BODY=' + json.dumps(raw[:1000], ensure_ascii=False))
+          except urllib.error.HTTPError as exc:
+              raw = exc.read().decode('utf-8', errors='replace')
+              print('TINY_CALL_STATUS=HTTP_' + str(exc.code))
+              print('REQUEST_BYTES=' + str(len(body)))
+              print('X_REQUEST_ID=' + str(exc.headers.get('x-request-id') or ''))
+              for key in ('x-ratelimit-limit-requests','x-ratelimit-remaining-requests','x-ratelimit-reset-requests','x-ratelimit-limit-tokens','x-ratelimit-remaining-tokens','x-ratelimit-reset-tokens'):
+                  value = exc.headers.get(key)
+                  if value is not None:
+                      print(key.upper().replace('-', '_') + '=' + value)
+              print('RESPONSE_BODY=' + json.dumps(raw[:1000], ensure_ascii=False))
+              raise SystemExit(20)
+          except Exception as exc:
+              print('TINY_CALL_STATUS=TRANSPORT_ERROR')
+              print('REQUEST_BYTES=' + str(len(body)))
+              print('ERROR=' + repr(exc))
+              raise SystemExit(21)
+          PY
+          rc=${PIPESTATUS[0]}
+          echo "return_code=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish safe diagnostic result
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          issue_url="$(gh issue create --repo "$GITHUB_REPOSITORY" --title "t32-tiny-shangtang-one-call-run:${GITHUB_RUN_ID}" --body "Tiny no-company-content Shangtang diagnostic. Exactly one provider call; no retry/fallback.\n\n\`\`\`text\n$(cat "$RUNNER_TEMP/t32-probe.log")\n\`\`\`")"
+          echo "$issue_url"
