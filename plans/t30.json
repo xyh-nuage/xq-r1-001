@@ -1,0 +1,1 @@
+{"schema":"remote_ci_plan.v1","steps":[{"cwd":"l1","argv":["python","-m","pip","install","-e",".[dev]"]},{"cwd":"l1","argv":["python","-m","pytest","-q","tests/test_research_local_fact_v2.py"]},{"cwd":"l1","argv":["python","-m","pytest","-q","tests/test_shared_local_semantics.py","tests/test_factorized_semantic_chat_only.py"]},{"cwd":"l1","argv":["python","-m","pytest","-q"]}]}
