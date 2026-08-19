@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   compare:
+    environment: shangtang
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -30,6 +31,7 @@ jobs:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
         run: |
           set -euo pipefail
+          test -n "$KNOWLEDGE_READ_TOKEN"
           repo="$RUNNER_TEMP/knowledge"
           git init -q "$repo"
           git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
