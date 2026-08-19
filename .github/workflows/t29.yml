@@ -129,12 +129,12 @@ jobs:
       - name: Verify Tangshang credential is present without calling provider
         shell: bash
         env:
-          TANGSHANG_API_KEY: ${{ secrets.FLASH }}
+          TANGSHANG_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           set -euo pipefail
-          test -n "$TANGSHANG_API_KEY" || { echo 'TANGSHANG_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
+          test -n "$TANGSHANG_API_KEY" || { echo 'LLM_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
           test -n "$LLM_BASE_URL" || { echo 'LLM_BASE_URL=MISSING_NO_MODEL_CALL'; exit 2; }
           test -n "$LLM_MODEL" || { echo 'LLM_MODEL=MISSING_NO_MODEL_CALL'; exit 2; }
           echo 'TANGSHANG_CREDENTIAL_CONFIG_PRESENT_NO_PROVIDER_CALL_YET'
@@ -143,7 +143,7 @@ jobs:
         id: model
         shell: bash
         env:
-          TANGSHANG_API_KEY: ${{ secrets.FLASH }}
+          TANGSHANG_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
           SOURCE_SHA: ${{ steps.source.outputs.value }}
