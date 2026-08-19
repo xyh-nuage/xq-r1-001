@@ -26,6 +26,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C private-knowledge rev-parse HEAD)" = "211919ca7128e091dcf6fa7742ae131603a32e27"
+          python -m pip install -q pytest
           python -m pytest -q private-knowledge/l0/tests/test_export_research_daily_group_corpus.py
       - name: Export full corpus
         run: |
