@@ -1,0 +1,87 @@
+name: t74-missing-snapshot-overlap-fixed
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t74_missing_snapshot_overlap_fixed.yml']
+permissions:
+  contents: read
+  issues: write
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    environment: shangtang
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: xyh-nuage/knowledge
+          ref: 01375a97e1717b2d3f223a2513eaf6b108f915e6
+          token: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+          path: private-knowledge
+          fetch-depth: 1
+      - name: Analyze overlap privately
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t74"
+          python - <<'PY'
+          import json, sqlite3, os
+          from collections import defaultdict, Counter
+          from pathlib import Path
+          db=sqlite3.connect('file:private-knowledge/l0_state.db?mode=ro',uri=True); db.row_factory=sqlite3.Row
+          groups={r['group_id']:r['group_name'] for r in db.execute('select group_id,group_name from groups')}
+          def nk(x):
+              s=str(x or '').strip(); return s[3:].strip() if s.startswith('群聊_') else s
+          by_name=defaultdict(list)
+          for gid,name in groups.items(): by_name[nk(name)].append(gid)
+          unique={k:v[0] for k,v in by_name.items() if len(v)==1}
+          def cg(r):
+              gid=r['group_id']
+              return gid if gid in groups else (unique.get(nk(r['chat_name'])) or str(gid or r['chat_name'] or 'unknown'))
+          rows=list(db.execute('select stable_key,group_id,chat_name,date_key,source_seq,source_message_id,sender,original_text,time_anchor,source_fingerprint,missing_in_latest_snapshot from source_messages'))
+          current=[]; missing=[]
+          for r in rows:
+              x=dict(r); x['canonical_group_id']=cg(r); (missing if r['missing_in_latest_snapshot'] else current).append(x)
+          def kc(r): return (r['canonical_group_id'],str(r['time_anchor'] or ''),str(r['sender'] or ''),str(r['original_text'] or ''))
+          def ki(r): return (r['canonical_group_id'],str(r['source_message_id'] or '')) if r['source_message_id'] else None
+          def ks(r): return (r['canonical_group_id'],str(r['date_key'] or ''),int(r['source_seq'] or 0),str(r['sender'] or ''),str(r['original_text'] or ''))
+          ci=defaultdict(list); cc=defaultdict(list); cs=defaultdict(list); cf=defaultdict(list)
+          for r in current:
+              cc[kc(r)].append(r['stable_key']); k=ki(r)
+              if k: ci[k].append(r['stable_key'])
+              cs[ks(r)].append(r['stable_key'])
+              if r['source_fingerprint']: cf[str(r['source_fingerprint'])].append(r['stable_key'])
+          stats=Counter(); examples=[]
+          for r in missing:
+              matches={'content':cc.get(kc(r),[]),'source_message_id':ci.get(ki(r),[]) if ki(r) else [],'date_seq_content':cs.get(ks(r),[]),'source_fingerprint':cf.get(str(r['source_fingerprint']),[]) if r['source_fingerprint'] else []}
+              if matches['content']: stats['match_content']+=1
+              if matches['source_message_id']: stats['match_source_message_id']+=1
+              if matches['date_seq_content']: stats['match_date_seq_content']+=1
+              if matches['source_fingerprint']: stats['match_source_fingerprint']+=1
+              if any(matches.values()): stats['match_any']+=1
+              else:
+                  stats['no_exact_match']+=1
+                  if len(examples)<100: examples.append({k:r[k] for k in ['stable_key','canonical_group_id','chat_name','date_key','source_seq','source_message_id','sender','original_text','time_anchor']})
+          gids=sorted({r['canonical_group_id'] for r in current+missing})
+          per_group=[]
+          for gid in gids:
+              mc=[r for r in missing if r['canonical_group_id']==gid]; cc_rows=[r for r in current if r['canonical_group_id']==gid]
+              no=sum(1 for r in mc if not cc.get(kc(r)))
+              per_group.append({'group_id':gid,'group_name':groups.get(gid,'unknown'),'current_count':len(cc_rows),'missing_count':len(mc),'missing_without_content_match':no})
+          out={'schema_version':'research_missing_snapshot_overlap.v1','current_count':len(current),'missing_count':len(missing),'match_stats':dict(stats),'per_group':per_group,'unmatched_missing_examples':examples}
+          root=Path(os.environ['RUNNER_TEMP'])/'t74'; (root/'overlap.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+          pub={'current_count':len(current),'missing_count':len(missing),'match_content':stats['match_content'],'match_source_message_id':stats['match_source_message_id'],'match_date_seq_content':stats['match_date_seq_content'],'match_source_fingerprint':stats['match_source_fingerprint'],'match_any':stats['match_any'],'no_exact_match':stats['no_exact_match']}
+          (root/'public_summary.json').write_text(json.dumps(pub,indent=2),encoding='utf-8'); db.close()
+          PY
+      - name: Persist
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          python scripts/private_results_publisher.py --source-root "$RUNNER_TEMP/t74" --source-sha 01375a97e1717b2d3f223a2513eaf6b108f915e6 --harness-sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --date 2026-08-19 --evaluation research_missing_snapshot_overlap_t74 --copy overlap.json=overlap.json --copy public_summary.json=public_summary.json 2>&1 | tee "$RUNNER_TEMP/t74-persist.log"
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo 'source_sha=01375a97e1717b2d3f223a2513eaf6b108f915e6'; echo 'provider_call_count=0'; cat "$RUNNER_TEMP/t74/public_summary.json" 2>/dev/null || true; cat "$RUNNER_TEMP/t74-persist.log" 2>/dev/null | grep -E 'private_result_commit=|private_result_path=|PRIVATE_RESULT_PERSIST_PASS' || true; } > "$RUNNER_TEMP/t74-report.txt"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "t74-missing-snapshot-overlap:${GITHUB_RUN_ID}" --body-file "$RUNNER_TEMP/t74-report.txt"
