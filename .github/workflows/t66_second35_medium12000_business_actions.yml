@@ -1,0 +1,99 @@
+name: t66-second35-medium12000-business-actions
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t66_second35_medium12000_business_actions.yml']
+permissions:
+  contents: read
+  issues: write
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    environment: shangtang
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: 95ddc75fb0e7fc32149d1ddae412309fdce7812c
+      PACKET_SOURCE_COMMIT: d9f527a4e5d39130ef79653abb4799ff8f2a07ac
+      PACKET_BLOB: f9aadfcadf1b697c7309787ca6e3b41d8a740ff5
+      LLM_MODEL: deepseek-v4-flash
+    steps:
+      - name: Checkout public harness
+        uses: actions/checkout@v4
+      - name: Fetch exact private source and packet
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/knowledge"
+          git init -q "$root"
+          git -C "$root" remote add origin https://github.com/xyh-nuage/knowledge.git
+          ask="$RUNNER_TEMP/askpass.sh"
+          printf '#!/bin/sh\ncase "$1" in *Username*) echo x-access-token;; *Password*) echo "$KNOWLEDGE_READ_TOKEN";; esac\n' > "$ask"
+          chmod 700 "$ask"
+          export GIT_ASKPASS="$ask" GIT_TERMINAL_PROMPT=0
+          git -C "$root" fetch -q --depth=1 origin "$SOURCE_SHA"
+          git -C "$root" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$root" rev-parse HEAD)" = "$SOURCE_SHA"
+          git -C "$root" fetch -q --depth=1 origin "$PACKET_SOURCE_COMMIT"
+          test "$(git -C "$root" rev-parse "$PACKET_SOURCE_COMMIT:evaluation_results/full_context_second35_low8000_t56/2026-08-19_5093c76e_run32230539371/human_context_packet.txt")" = "$PACKET_BLOB"
+          git -C "$root" show "$PACKET_SOURCE_COMMIT:evaluation_results/full_context_second35_low8000_t56/2026-08-19_5093c76e_run32230539371/human_context_packet.txt" > "$RUNNER_TEMP/human_context_packet.txt"
+          python - <<'PY'
+          import importlib.util, os
+          from pathlib import Path
+          src = Path(os.environ['RUNNER_TEMP']) / 'knowledge' / 'l1' / 'tools' / 'build_research_matter_window_packet.py'
+          spec = importlib.util.spec_from_file_location('matter_packet', src)
+          mod = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          Path(os.environ['RUNNER_TEMP'], 'human_context_system_prompt.txt').write_text(mod.SYSTEM_PROMPT + '\n', encoding='utf-8')
+          print('system_prompt_chars=' + str(len(mod.SYSTEM_PROMPT)))
+          PY
+      - name: Run provider experiment
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          set -o pipefail
+          out="$RUNNER_TEMP/t66"
+          mkdir -p "$out"
+          cp "$RUNNER_TEMP/human_context_packet.txt" "$out/human_context_packet.txt"
+          cp "$RUNNER_TEMP/human_context_system_prompt.txt" "$out/human_context_system_prompt.txt"
+          python scripts/t66_shangtang_immutable_second35_medium12000_business_actions.py \
+            "$RUNNER_TEMP/human_context_packet.txt" \
+            "$RUNNER_TEMP/human_context_system_prompt.txt" \
+            "$out" 2>&1 | tee "$RUNNER_TEMP/t66.log"
+      - name: Persist private evidence
+        if: always()
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          if [ -s "$RUNNER_TEMP/t66/full_context_raw_result.json" ]; then
+            python scripts/private_results_publisher.py \
+              --source-root "$RUNNER_TEMP/t66" \
+              --source-sha "$SOURCE_SHA" \
+              --harness-sha "$GITHUB_SHA" \
+              --run-id "$GITHUB_RUN_ID" \
+              --job-id "$GITHUB_JOB" \
+              --date 2026-08-19 \
+              --evaluation full_context_second35_medium12000_business_actions_t66 \
+              --copy full_context_raw_result.json=full_context_raw_result.json \
+              --copy human_context_packet.txt=human_context_packet.txt \
+              --copy human_context_system_prompt.txt=human_context_system_prompt.txt \
+              2>&1 | tee "$RUNNER_TEMP/t66-persist.log"
+          fi
+      - name: Report
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "source_sha=$SOURCE_SHA"
+            echo "packet_source_commit=$PACKET_SOURCE_COMMIT"
+            echo "provider_model=$LLM_MODEL"
+            echo
+            cat "$RUNNER_TEMP/t66.log" 2>/dev/null || true
+            echo
+            cat "$RUNNER_TEMP/t66-persist.log" 2>/dev/null || true
+          } > "$RUNNER_TEMP/t66-report.txt"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "t66-second35-medium12000-business-actions:${GITHUB_RUN_ID}" --body-file "$RUNNER_TEMP/t66-report.txt"
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/knowledge" "$RUNNER_TEMP/askpass.sh" "$RUNNER_TEMP/t66" "$RUNNER_TEMP/t66.log" "$RUNNER_TEMP/t66-persist.log" "$RUNNER_TEMP/t66-report.txt" "$RUNNER_TEMP/human_context_packet.txt" "$RUNNER_TEMP/human_context_system_prompt.txt"
