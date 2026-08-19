@@ -1,0 +1,1 @@
+The next t29 request is authorized against frozen knowledge source 12003bf32efea04215f68e548ffb4c8d23778291 using secret FLASH. A prior credential-name check consumed zero provider/model calls.
