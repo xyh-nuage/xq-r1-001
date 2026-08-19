@@ -1,0 +1,20 @@
+name: t75-status
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t75_status.yml']
+permissions:
+  actions: read
+  contents: read
+  issues: write
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report latest t75 status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow t75_daily_group_final_corpus.yml --limit 1 --json databaseId,status,conclusion,headSha,createdAt,updatedAt > /tmp/status.json
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "t75-status:${GITHUB_RUN_ID}" --body "$(cat /tmp/status.json)"
