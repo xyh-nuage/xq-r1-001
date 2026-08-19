@@ -1,0 +1,1 @@
+This commit freezes the public harness immediately before the FLASH-bound t29 request is opened.
