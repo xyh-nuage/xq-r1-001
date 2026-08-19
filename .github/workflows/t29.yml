@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh issue create --repo "${{ github.repository }}" --title "t29-full-context-shangtang-one-call-run:${{ github.run_id }}" --body "Safe locator for the single-call full-context Matter baseline using only the Shangtang environment."
+          gh issue create --repo "${{ github.repository }}" --title "t29-full-context-shangtang-one-call-run:${{ github.run_id }}" --body "Strict single-call full-context Matter baseline. Environment: shangtang. Secret: LLM_API_KEY. Provider: https://token.sensenova.cn/v1/."
 
       - name: Resolve source and harness SHAs
         id: source
@@ -114,7 +114,7 @@ jobs:
           test "$(git hash-object "$input_dir/candidate_db_export.json")" = "$expected_blob"
           rm -f "$askpass"
           unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
-          echo 'shangtang_source=VERIFIED_EXACT_SHA'
+          echo 'source=VERIFIED_EXACT_SHA'
           echo 'persisted_l1_attachment_input=VERIFIED_IMMUTABLE'
 
       - name: Run deterministic isolation gate and rehydrate L1 input
@@ -126,173 +126,39 @@ jobs:
             --source-sha "${{ steps.source.outputs.value }}" \
             --plan "$RUNNER_TEMP/harness/plans/t29.json"
 
-      - name: Verify Shangtang credential is present without calling provider
+      - name: Verify Shangtang configuration without provider call
         shell: bash
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          LLM_MODEL_SECRET: ${{ secrets.LLM_MODEL }}
+          LLM_MODEL_VAR: ${{ vars.LLM_MODEL }}
         run: |
           set -euo pipefail
           test -n "$LLM_API_KEY" || { echo 'LLM_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
-          test -n "$LLM_MODEL" || { echo 'LLM_MODEL=MISSING_NO_MODEL_CALL'; exit 2; }
-          echo 'SHANGTANG_CREDENTIAL_CONFIG_PRESENT_NO_PROVIDER_CALL_YET'
+          if [ -n "$LLM_MODEL_SECRET" ]; then
+            echo "LLM_MODEL=$LLM_MODEL_SECRET" >> "$GITHUB_ENV"
+          elif [ -n "$LLM_MODEL_VAR" ]; then
+            echo "LLM_MODEL=$LLM_MODEL_VAR" >> "$GITHUB_ENV"
+          else
+            echo 'LLM_MODEL=MISSING_NO_MODEL_CALL'
+            exit 2
+          fi
+          echo 'github_environment=shangtang'
+          echo 'provider_base_url=https://token.sensenova.cn/v1/'
+          echo 'SHANGTANG_CONFIG_PRESENT_NO_PROVIDER_CALL_YET'
 
-      - name: Execute exactly one full-context model HTTP call
+      - name: Execute exactly one Shangtang model HTTP call
         id: model
         shell: bash
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ secrets.LLM_MODEL }}
-          LLM_BASE_URL: https://token.sensenova.cn/v1/
           SOURCE_SHA: ${{ steps.source.outputs.value }}
-          HARNESS_SHA: ${{ steps.source.outputs.harness }}
         run: |
           set +e
           root="$RUNNER_TEMP/full-context-shangtang/source"
           out="$root/l1/evaluation/vnext/runtime/research_full_context_matter_baseline_shangtang"
           mkdir -p "$out"
-          python - "$root" "$out" <<'PY'
-          import os, pathlib, sys
-          from urllib.parse import urlparse
-          root = pathlib.Path(sys.argv[1])
-          out = pathlib.Path(sys.argv[2])
-          sys.path.insert(0, str(root / 'l1' / 'tools'))
-          sys.path.insert(0, str(root / 'l1'))
-          import run_research_full_context_matter_baseline as b
-
-          shared = root / 'context/evaluation/company_shared_local_semantics_slice_a.jsonl'
-          fixture = root / 'l1/tests/fixtures/obsolete_media_test_data.zip'
-          l1db = root / 'l1/evaluation/vnext/runtime/full_context_matter_input/l1_candidate_state.db'
-          silver1 = root / 'context/evaluation/continuous_slice_a_matter_gold_redraft.v1.json'
-          silver2 = root / 'context/evaluation/continuous_slice_a_matter_gold_redraft.v2.json'
-          source_sha = os.environ['SOURCE_SHA']
-          base_url = 'https://token.sensenova.cn/v1/'
-
-          input_document = b.build_full_context_input(
-              shared_replay=shared,
-              fixture_zip=fixture,
-              l1_candidate_db=l1db,
-              l1_run_id='run_c46e10f6833adb71',
-          )
-          input_path = out / 'full_context_input.json'
-          b._write_json(input_path, input_document)
-
-          invoker = b.OneShotOpenAICompatibleInvoker(
-              api_key=os.environ['LLM_API_KEY'],
-              base_url=base_url,
-              model_id=os.environ['LLM_MODEL'],
-              timeout_seconds=180,
-              max_completion_tokens=6000,
-              disable_reasoning=True,
-          )
-          body = invoker._body(input_document['system_prompt'], input_document['user_payload'], json_retry=False)
-
-          # USER-AUTHORIZED MODEL CALL: exactly one HTTP request, no preflight and no retry.
-          try:
-              envelope, content, elapsed_ms, request_id = invoker._call(body)
-          except Exception as exc:
-              failure = {
-                  'schema_version': b.RESULT_SCHEMA,
-                  'task_id': b.TASK_ID,
-                  'status': 'MODEL_CALL_FAILED_PRE_REFERENCE',
-                  'exact_source_commit': source_sha,
-                  'exact_model_input': b._file_identity(input_path),
-                  'provider': urlparse(base_url).netloc,
-                  'provider_base_url': base_url,
-                  'configured_model': os.environ['LLM_MODEL'],
-                  'temperature': 0,
-                  'model_call_count': 1,
-                  'retry_count': 0,
-                  'error': {'type': type(exc).__name__, 'message': str(exc)},
-                  'silver_gold_reference_opened_before_this_file': False,
-              }
-              b._write_json(out / 'full_context_raw_result.json', failure)
-              print('ONE_CALL_STATUS=MODEL_CALL_FAILED')
-              raise SystemExit(20)
-
-          attempt = {
-              'attempt': 1,
-              'request_id': request_id,
-              'elapsed_ms': elapsed_ms,
-              'provider_envelope': envelope,
-              'raw_model_content': content,
-          }
-          try:
-              parsed = b._parse_json(content)
-          except Exception as exc:
-              failure = {
-                  'schema_version': b.RESULT_SCHEMA,
-                  'task_id': b.TASK_ID,
-                  'status': 'MODEL_RESULT_INVALID_JSON_PRE_REFERENCE',
-                  'exact_source_commit': source_sha,
-                  'exact_model_input': b._file_identity(input_path),
-                  'provider': urlparse(base_url).netloc,
-                  'provider_base_url': base_url,
-                  'configured_model': os.environ['LLM_MODEL'],
-                  'response_model_version': str(envelope.get('model') or os.environ['LLM_MODEL']),
-                  'temperature': 0,
-                  'model_call_count': 1,
-                  'retry_count': 0,
-                  'raw_provider_attempts': [attempt],
-                  'json_error': {'type': type(exc).__name__, 'message': str(exc)},
-                  'normalized_json': None,
-                  'silver_gold_reference_opened_before_this_file': False,
-              }
-              b._write_json(out / 'full_context_raw_result.json', failure)
-              print('ONE_CALL_STATUS=INVALID_JSON_NO_RETRY')
-              raise SystemExit(21)
-
-          valid_ids = {str(row['stable_id']) for row in input_document['user_payload']['messages']}
-          normalized = b.normalize_model_output(parsed, valid_ids)
-          usage = dict(envelope.get('usage') or {}) if isinstance(envelope.get('usage'), dict) else {}
-          raw = {
-              'schema_version': b.RESULT_SCHEMA,
-              'task_id': b.TASK_ID,
-              'status': 'MODEL_RESULT_PERSISTED_PRE_REFERENCE',
-              'exact_source_commit': source_sha,
-              'exact_model_input': b._file_identity(input_path),
-              'provider': urlparse(base_url).netloc,
-              'provider_base_url': base_url,
-              'configured_model': os.environ['LLM_MODEL'],
-              'response_model_version': str(envelope.get('model') or os.environ['LLM_MODEL']),
-              'system_prompt': input_document['system_prompt'],
-              'temperature': 0,
-              'token_usage': {
-                  'prompt_tokens': b._usage_int(usage, 'prompt_tokens', 'input_tokens'),
-                  'completion_tokens': b._usage_int(usage, 'completion_tokens', 'output_tokens'),
-                  'total_tokens': b._usage_int(usage, 'total_tokens') or (b._usage_int(usage, 'prompt_tokens', 'input_tokens') + b._usage_int(usage, 'completion_tokens', 'output_tokens')),
-                  'provider_usage': usage,
-              },
-              'cost': b._cost(usage, None, None),
-              'model_call_count': 1,
-              'json_parse_retry_count': 0,
-              'retry_policy': 'strictly no retry: user authorized exactly one model call',
-              'raw_provider_attempts': [attempt],
-              'normalized_json': normalized,
-              'silver_gold_reference_opened_before_this_file': False,
-          }
-          b._write_json(out / 'full_context_raw_result.json', raw)
-
-          # Silver/Gold may only be opened after the successful raw result above exists.
-          evaluation = b.run_posthoc_phase(
-              output_dir=out,
-              normalized=normalized,
-              silver_v1_path=silver1,
-              silver_v2_path=silver2,
-              all_source_ids=valid_ids,
-          )
-          b._write_json(out / 'flat.json', b._flat(normalized, raw, evaluation))
-          print('ONE_CALL_STATUS=SUCCESS')
-          print('model_calls=1')
-          print('json_retries=0')
-          print('provider_base_url=' + base_url)
-          print('predicted_matters=' + str(len(normalized.get('matters') or [])))
-          print('predicted_unresolved_sources=' + str(len({x for r in normalized.get('unresolved') or [] for x in r.get('source_ids') or []})))
-          print('major_real_matters_found=' + str(evaluation['major_real_matters']['found_count']))
-          print('major_real_matters_total=' + str(evaluation['major_real_matters']['reference_concrete_matter_count']))
-          print('false_merge_matters=' + str(evaluation['false_merge']['predicted_matters_merging_multiple_certain_reference_matters']))
-          print('severe_split_reference_matters=' + str(evaluation['severe_split']['reference_matters_severely_split']))
-          PY
+          python "$RUNNER_TEMP/harness/scripts/t29_shangtang_one_call.py" "$root" "$out"
           rc=$?
           echo "return_code=$rc" >> "$GITHUB_OUTPUT"
           if [ "$rc" -eq 0 ]; then
@@ -330,15 +196,17 @@ jobs:
             --evaluation "research_full_context_matter_baseline_shangtang_one_call" \
             "${copies[@]}"
 
-      - name: Enforce one-call terminal state
+      - name: Report terminal state
         if: always()
         shell: bash
         run: |
           set -euo pipefail
           if [ "${{ steps.model.outputs.success }}" = "true" ]; then
             echo 'RESEARCH_FULL_CONTEXT_SHANGTANG_ONE_CALL_COMPLETE'
+          elif [ -n "${{ steps.model.outputs.return_code }}" ]; then
+            echo 'RESEARCH_FULL_CONTEXT_SHANGTANG_ONE_CALL_CONSUMED_NO_RETRY'
           else
-            echo 'RESEARCH_FULL_CONTEXT_SHANGTANG_ONE_CALL_ENDED_NO_RETRY'
+            echo 'RESEARCH_FULL_CONTEXT_SHANGTANG_BLOCKED_BEFORE_MODEL_CALL'
           fi
 
       - name: Cleanup
