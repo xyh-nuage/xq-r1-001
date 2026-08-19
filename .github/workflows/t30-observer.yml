@@ -1,0 +1,32 @@
+name: t30-observer
+
+on:
+  workflow_run:
+    workflows: [t30]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish safe completion locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$CONCLUSION" =~ ^[a-z_]+$ ]]
+          [[ "$HARNESS_SHA" =~ ^[0-9a-f]{40}$ ]]
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "t30-complete:${RUN_ID}:${CONCLUSION}" \
+            --body "Safe t30 completion locator. harness_sha=${HARNESS_SHA}; no private source data included."
