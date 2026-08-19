@@ -59,3 +59,4 @@ jobs:
       - name: Cleanup
         if: always()
         run: rm -rf "$RUNNER_TEMP/t47b" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/askpass.sh" "$RUNNER_TEMP/t47b.log"
+# deterministic packet build only; no provider call
