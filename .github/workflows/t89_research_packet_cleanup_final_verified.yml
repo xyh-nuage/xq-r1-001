@@ -1,0 +1,117 @@
+name: t89-research-packet-cleanup-final-verified
+
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t89_research_packet_cleanup_final_verified.yml']
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Publish safe locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue create --repo "$GITHUB_REPOSITORY" --title "t89-packet-cleanup-final:${GITHUB_RUN_ID}" --body "Final deterministic packet cleanup validation for exact source SHA 398e7933490d9188d39888bf8717277c05a6c5b8. No company content is included here."
+      - uses: actions/checkout@v4
+      - name: Verify private result write access
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python scripts/private_results_preflight.py
+      - name: Checkout exact private source
+        uses: actions/checkout@v4
+        with:
+          repository: xyh-nuage/knowledge
+          ref: 398e7933490d9188d39888bf8717277c05a6c5b8
+          token: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+          path: private-knowledge
+          fetch-depth: 1
+      - name: Focused tests
+        run: |
+          python -m pip install -q pytest
+          python -m pytest -q private-knowledge/l1/tests/test_prepare_research_daily_group_model_inputs.py
+      - name: Full real-data validation and persistence
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/t89-out"; sel="$RUNNER_TEMP/t89-private"; mkdir -p "$sel"
+          python private-knowledge/l1/tools/prepare_research_daily_group_model_inputs.py --db private-knowledge/l0_state.db --output-dir "$out" >/dev/null
+          python - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          out=Path(os.environ['RUNNER_TEMP'])/'t89-out'; sel=Path(os.environ['RUNNER_TEMP'])/'t89-private'
+          summary=json.loads((out/'build_summary.json').read_text(encoding='utf-8'))
+          idx=[json.loads(x) for x in (out/'model_inputs/packet_index.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()]
+          packets={r['packet_id']:(out/'model_inputs/packets'/f"{r['packet_id']}.txt").read_text(encoding='utf-8') for r in idx}
+          combined='\n'.join(packets.values())
+          assert summary['schema_version']=='research_daily_group_model_inputs_summary.v4'
+          assert re.search(r'消息\d+ \| \d{1,2}月\d{1,2}日 \d{1,2}:\d{2} \| \[系统\]\n\d{1,2}月\d{1,2}日 \d{1,2}:\d{2}',combined) is None
+          assert '语音6"秒未播放' not in combined and '语音（未转写，6秒）' in combined
+
+          header=re.compile(r'^消息(\d+) \| (.*?) \| (.*)$')
+          def blocks(text):
+              result=[]; cur=None
+              for line in text.splitlines():
+                  m=header.match(line)
+                  if m:
+                      if cur: result.append(cur)
+                      cur={'ordinal':int(m.group(1)),'time':m.group(2),'sender':m.group(3),'body':[]}
+                  elif cur is not None:
+                      cur['body'].append(line)
+              if cur: result.append(cur)
+              for b in result: b['text']='\n'.join(b['body']).strip()
+              return result
+
+          for pid,text in packets.items():
+              bs=blocks(text)
+              for a,b in zip(bs,bs[1:]):
+                  assert not (a['sender'] in {'system','系统','[系统]'} and b['sender'] in {'system','系统','[系统]'} and a['time']==b['time'] and a['text']==b['text'])
+          human='@Winter🍥\u2005亲，6.15货转的这个，是从6.16收下家仓储么'
+          assert combined.count(human)>=2
+
+          median_rows=[r for r in idx if r['group_name']=='群聊_新创~诚泰通合作群' and r['date']=='2026-07-01']
+          assert len(median_rows)==1
+          median=packets[median_rows[0]['packet_id']]
+          assert median.count('文件：诚泰通新创267179079结算单.pdf')==1
+          assert '7月1日 11:22 | [系统]' not in median
+
+          j8_rows=[r for r in idx if r['group_name']=='群聊_新创-中泰大佑木薯淀粉' and r['date']=='2026-07-08']
+          j8='\n'.join(packets[r['packet_id']] for r in j8_rows)
+          related=[b for b in blocks(j8) if 'image_20260708_中泰-季磊_a06198ec2263e747.jpg' in b['text']]
+          assert len(related)==2
+          assert sum('图片内容：' in b['text'] for b in related)==1
+          assert any('图片引用 Bonn 的消息' in b['text'] for b in related)
+
+          j9_rows=[r for r in idx if r['group_name']=='群聊_新创-中泰大佑木薯淀粉' and r['date']=='2026-07-09']
+          assert len(j9_rows)==2
+          request_holders=[r for r in j9_rows if '我想看看coa和生产日期' in packets[r['packet_id']]]
+          assert len(request_holders)==1
+          request_packet=packets[request_holders[0]['packet_id']]
+          assert 'CERTIFICATE OF PRODUCTION' in request_packet
+
+          july16_rows=[r for r in idx if r['group_name']=='群聊_新创-中泰大佑木薯淀粉' and r['date']=='2026-07-16']
+          july16='\n'.join(packets[r['packet_id']] for r in july16_rows)
+          assert len(july16_rows)==2
+          assert not any(b['sender']=='杨森🍀℡' and b['time']=='2026-07-16 11:12:00' and b['text']=='视频' for b in blocks(july16))
+          holder16=[r for r in july16_rows if '发一下COA和CIQ' in packets[r['packet_id']]]
+          assert len(holder16)==1 and 'CERTIFICATE OF ANALYSIS ORIGINAL' in packets[holder16[0]['packet_id']]
+
+          report={'source_sha':'398e7933490d9188d39888bf8717277c05a6c5b8','summary':summary,'median_packet_id':median_rows[0]['packet_id'],'july8_packet_ids':[r['packet_id'] for r in j8_rows],'july9_packet_ids':[r['packet_id'] for r in j9_rows],'july9_request_packet_id':request_holders[0]['packet_id'],'july16_packet_ids':[r['packet_id'] for r in july16_rows]}
+          (sel/'validation.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+          (sel/'median.txt').write_text(median,encoding='utf-8')
+          (sel/'july8.txt').write_text(j8,encoding='utf-8')
+          (sel/'july9.txt').write_text('\n'.join(f"===== {r['packet_id']} =====\n{packets[r['packet_id']]}" for r in j9_rows),encoding='utf-8')
+          (sel/'july16.txt').write_text('\n'.join(f"===== {r['packet_id']} =====\n{packets[r['packet_id']]}" for r in july16_rows),encoding='utf-8')
+          PY
+          eval_date="$(date -u +%F)"
+          python scripts/private_results_publisher.py --source-root "$sel" --source-sha 398e7933490d9188d39888bf8717277c05a6c5b8 --harness-sha "${{ github.sha }}" --run-id "${{ github.run_id }}" --date "$eval_date" --evaluation research_packet_cleanup_final_verified --copy validation.json=validation.json --copy median.txt=median.txt --copy july8.txt=july8.txt --copy july9.txt=july9.txt --copy july16.txt=july16.txt
+      - name: Cleanup
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/t89-out" "$RUNNER_TEMP/t89-private" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
