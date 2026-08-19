@@ -11,7 +11,7 @@ jobs:
   status:
     runs-on: ubuntu-latest
     steps:
-      - name: Report t69 status
+      - name: Report latest t69 status
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
