@@ -1,0 +1,202 @@
+name: t31
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: exact private Research Matter Phase 0 source commit
+        required: true
+        type: string
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: remote-t31-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t31:'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "${{ github.repository }}" --title "t31-matter-phase0-run:${{ github.run_id }}" --body "Safe run locator for Seen-only Matter Phase 0 candidate export. No company content."
+
+      - name: Resolve source and harness SHAs
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            source="${REQUEST_TITLE#rq:t31:}"
+            harness="$REQUEST_HARNESS_SHA"
+          else
+            source="$DISPATCH_SHA"
+            harness="$CURRENT_HARNESS_SHA"
+          fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness_sha=INVALID'; exit 2; }
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Verify private result write access
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
+
+      - name: Checkout exact private source
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/matter-phase0-source"
+          repo="$root/source"
+          mkdir -p "$root"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t31-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'private_source=VERIFIED_EXACT_SHA'
+
+      - name: Export Seen-only Phase 0 candidates
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/matter-phase0-source/source"
+          out="$repo/l1/evaluation/vnext/runtime/research_matter_phase0_candidates"
+          python -m py_compile "$repo/l1/tools/export_research_matter_phase0_candidates.py"
+          python "$repo/l1/tools/export_research_matter_phase0_candidates.py" \
+            --db "$repo/l0_state.db" \
+            --output-dir "$out" \
+            --source-sha "${{ steps.source.outputs.value }}"
+
+      - name: Audit candidate boundary numerically
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/matter-phase0-source/source"
+          out="$repo/l1/evaluation/vnext/runtime/research_matter_phase0_candidates"
+          python - "$out/audit.json" "${{ steps.source.outputs.value }}" <<'PY'
+          import json, sys
+          audit = json.load(open(sys.argv[1], encoding='utf-8'))
+          expected = {
+              'source_group_days': 365,
+              'model_group_days': 304,
+              'model_messages': 4908,
+              'packet_count': 306,
+              'primary_group_days': 3,
+              'provider_calls': 0,
+              'silver_created': 0,
+              'model_predictions_created': 0,
+          }
+          for key, value in expected.items():
+              if int(audit.get(key, -1)) != value:
+                  raise SystemExit(f'{key}=UNEXPECTED')
+          if int(audit.get('candidate_group_days', 0)) < 5:
+              raise SystemExit('candidate_group_days=TOO_SMALL')
+          if int(audit.get('budget_split_group_days', 0)) < 1:
+              raise SystemExit('budget_split_group_days=MISSING')
+          print('source_sha=' + sys.argv[2])
+          for key in ('candidate_group_days','candidate_packets','primary_group_days','budget_split_group_days','source_group_days','model_group_days','model_messages','packet_count','provider_calls','silver_created','model_predictions_created'):
+              print(f'{key}={int(audit[key])}')
+          print('sealed_unseen_used=0')
+          print('company_runtime_used=0')
+          PY
+
+      - name: Persist private Phase 0 evidence
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/matter-phase0-source/source"
+          base="l1/evaluation/vnext/runtime/research_matter_phase0_candidates"
+          test -f "$root/$base/audit.json"
+          test -f "$root/$base/candidate_index.json"
+          test -f "$root/$base/candidate_source_records.jsonl"
+          copies=(
+            --copy "$base/audit.json=audit.json"
+            --copy "$base/candidate_index.json=candidate_index.json"
+            --copy "$base/candidate_source_records.jsonl=candidate_source_records.jsonl"
+          )
+          shopt -s nullglob
+          packet_files=("$root/$base/candidate_packets/"*.txt)
+          test "${#packet_files[@]}" -gt 0
+          for file in "${packet_files[@]}"; do
+            name="$(basename "$file")"
+            copies+=(--copy "$base/candidate_packets/$name=candidate_packets/$name")
+          done
+          eval_date="$(date -u +%F)"
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$root" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation "research_matter_phase0_candidates" \
+            "${copies[@]}"
+
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'RESEARCH_MATTER_PHASE0_CANDIDATES_PASS'
+          echo 'provider_calls=0'
+          echo 'silver_created=0'
+          echo 'model_predictions_created=0'
+          echo 'sealed_unseen_used=0'
+          echo 'merge_performed=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/matter-phase0-source" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/t31-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
