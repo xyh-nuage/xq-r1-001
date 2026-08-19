@@ -1,0 +1,25 @@
+name: t30-cancel-temp
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+jobs:
+  cancel:
+    if: github.event.issue.user.login == github.repository_owner && github.event.issue.title == 't30-cancel:32258510001'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Cancel superseded t30 run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST "/repos/${GITHUB_REPOSITORY}/actions/runs/32258510001/cancel"
+          gh issue create --repo "$GITHUB_REPOSITORY" --title 't30-cancelled:32258510001' --body 'Superseded model comparison cancelled before redesign to use persisted frozen baseline outputs.'
