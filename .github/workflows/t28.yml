@@ -1,0 +1,302 @@
+name: t28
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: exact private full-context baseline source commit
+        required: true
+        type: string
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: remote-t28-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t28:'))
+    environment: deepseek
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "${{ github.repository }}" --title "t28-full-context-matter-baseline-run:${{ github.run_id }}" --body "Safe run locator for the Seen Slice-A one-shot full-context Matter reconstruction baseline. No company content is exposed here."
+
+      - name: Resolve source and harness SHAs
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            source="${REQUEST_TITLE#rq:t28:}"
+            harness="$REQUEST_HARNESS_SHA"
+          else
+            source="$DISPATCH_SHA"
+            harness="$CURRENT_HARNESS_SHA"
+          fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness_sha=INVALID'; exit 2; }
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Verify private result write access
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
+
+      - name: Prepare exact private source and immutable persisted L1 attachment evidence
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/full-context-source"
+          repo="$root/source"
+          result_commit="67389cf13187e1c768808f268173437a13552e1e"
+          result_path="evaluation_results/research_slice_a_l1_attachment_materialization/2026-08-18_0c2adfff_run32096296005/candidate_db_export.json"
+          expected_blob="9b95be232e3a500931f2faf03c5a238dc475c641"
+          mkdir -p "$root"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t28-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          git -C "$repo" fetch -q --depth=1 origin "$result_commit"
+          input_dir="$repo/l1/evaluation/vnext/runtime/full_context_matter_input"
+          mkdir -p "$input_dir"
+          git -C "$repo" show "$result_commit:$result_path" > "$input_dir/candidate_db_export.json"
+          test "$(git hash-object "$input_dir/candidate_db_export.json")" = "$expected_blob"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'full_context_source=VERIFIED_EXACT_SHA'
+          echo 'persisted_l1_attachment_input=VERIFIED_IMMUTABLE'
+
+      - name: Run deterministic baseline isolation gate and rehydrate L1 input
+        shell: bash
+        run: |
+          set -euo pipefail
+          python "$RUNNER_TEMP/harness/scripts/prepared_source_runner.py" \
+            --source-dir "$RUNNER_TEMP/full-context-source/source" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --plan "$RUNNER_TEMP/harness/plans/t28.json"
+
+      - name: Run one-shot full-context baseline
+        id: baseline
+        shell: bash
+        env:
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY || secrets.L1_LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || secrets.L1_LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL || secrets.L1_LLM_MODEL }}
+          L1_LLM_DISABLE_REASONING: 'true'
+          FULL_CONTEXT_LLM_TIMEOUT_SECONDS: '180'
+          FULL_CONTEXT_MAX_COMPLETION_TOKENS: '6000'
+        run: |
+          set +e
+          root="$RUNNER_TEMP/full-context-source/source"
+          input="l1/evaluation/vnext/runtime/full_context_matter_input"
+          base="l1/evaluation/vnext/runtime/research_full_context_matter_baseline"
+          mkdir -p "$root/$base"
+          log="$root/$base/model_execution.log"
+          python "$root/l1/tools/run_research_full_context_matter_baseline.py" \
+            --shared-replay "$root/context/evaluation/company_shared_local_semantics_slice_a.jsonl" \
+            --fixture-zip "$root/l1/tests/fixtures/obsolete_media_test_data.zip" \
+            --l1-candidate-db "$root/$input/l1_candidate_state.db" \
+            --l1-run-id "run_c46e10f6833adb71" \
+            --silver-v1 "$root/context/evaluation/continuous_slice_a_matter_gold_redraft.v1.json" \
+            --silver-v2 "$root/context/evaluation/continuous_slice_a_matter_gold_redraft.v2.json" \
+            --source-commit "${{ steps.source.outputs.value }}" \
+            --output-dir "$root/$base" \
+            >"$log" 2>&1
+          rc=$?
+          printf '{"return_code":%s,"source_sha":"%s","harness_sha":"%s"}\n' "$rc" "${{ steps.source.outputs.value }}" "${{ steps.source.outputs.harness }}" > "$root/$base/model_execution_status.json"
+          if [ "$rc" -ne 0 ]; then
+            echo 'failed=true' >> "$GITHUB_OUTPUT"
+            echo "return_code=$rc" >> "$GITHUB_OUTPUT"
+            echo 'FULL_CONTEXT_BASELINE_MODEL_PHASE_FAILED_PRIVATE_LOG_CAPTURED'
+            exit 0
+          fi
+          echo 'failed=false' >> "$GITHUB_OUTPUT"
+          echo 'return_code=0' >> "$GITHUB_OUTPUT"
+          echo 'FULL_CONTEXT_BASELINE_MODEL_PHASE_COMPLETE'
+
+      - name: Persist private failed baseline evidence
+        if: steps.baseline.outputs.failed == 'true'
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/full-context-source/source"
+          base="l1/evaluation/vnext/runtime/research_full_context_matter_baseline"
+          input="l1/evaluation/vnext/runtime/full_context_matter_input"
+          eval_date="$(date -u +%F)"
+          copies=(
+            --copy "$base/model_execution.log=model_execution.log"
+            --copy "$base/model_execution_status.json=model_execution_status.json"
+            --copy "$input/rehydration_summary.json=rehydration_summary.json"
+          )
+          if [ -f "$root/$base/full_context_input.json" ]; then
+            copies+=(--copy "$base/full_context_input.json=full_context_input.json")
+          fi
+          if [ -f "$root/$base/full_context_raw_result.json" ]; then
+            copies+=(--copy "$base/full_context_raw_result.json=full_context_raw_result.json")
+          fi
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$root" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation "research_full_context_matter_baseline_failed" \
+            "${copies[@]}"
+
+      - name: Fail after private failed-evidence persistence
+        if: steps.baseline.outputs.failed == 'true'
+        shell: bash
+        run: |
+          echo 'FULL_CONTEXT_BASELINE_FAILED_PRIVATE_DETAILS_PERSISTED'
+          exit 1
+
+      - name: Audit baseline boundaries and metrics numerically
+        if: steps.baseline.outputs.failed != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/full-context-source/source"
+          base="$root/l1/evaluation/vnext/runtime/research_full_context_matter_baseline"
+          python - "$base" "${{ steps.source.outputs.value }}" <<'PY'
+          import hashlib, json, pathlib, sys
+          base = pathlib.Path(sys.argv[1])
+          source_sha = sys.argv[2]
+          required = [
+              'full_context_input.json',
+              'full_context_raw_result.json',
+              'full_context_evaluation.json',
+              'full_context_evaluation.md',
+              'full_context_boss_summary.md',
+              'flat.json',
+          ]
+          for name in required:
+              if not (base / name).is_file():
+                  raise SystemExit('MISSING_REQUIRED_PRIVATE_RESULT_' + name)
+          inp = json.load(open(base / 'full_context_input.json', encoding='utf-8'))
+          raw = json.load(open(base / 'full_context_raw_result.json', encoding='utf-8'))
+          evaluation = json.load(open(base / 'full_context_evaluation.json', encoding='utf-8'))
+          flat = json.load(open(base / 'flat.json', encoding='utf-8'))
+          messages = inp['user_payload']['messages']
+          if len(messages) != 83:
+              raise SystemExit('SLICE_A_ROW_COUNT_DRIFT')
+          if raw.get('status') != 'MODEL_RESULT_PERSISTED_PRE_REFERENCE':
+              raise SystemExit('RAW_PRE_REFERENCE_STATUS_INVALID')
+          if raw.get('exact_source_commit') != source_sha:
+              raise SystemExit('SOURCE_SHA_BINDING_INVALID')
+          if raw.get('silver_gold_reference_opened_before_this_file') is not False:
+              raise SystemExit('REFERENCE_ORDER_VIOLATION_RAW')
+          if evaluation.get('reference_policy', {}).get('loaded_only_after_full_context_raw_result_persisted') is not True:
+              raise SystemExit('REFERENCE_ORDER_VIOLATION_EVALUATION')
+          calls = int(flat['model_calls'])
+          retries = int(flat['json_parse_retries'])
+          if retries not in (0, 1) or calls != 1 + retries:
+              raise SystemExit('ONE_SHOT_CALL_DISCIPLINE_VIOLATION')
+          for key in ('silver_gold_in_model_input','matter_registry_used','c1_calls','retrieval_calls','ocr_calls','raw_file_reparse'):
+              if int(flat[key]) != 0:
+                  raise SystemExit('BASELINE_BOUNDARY_VIOLATION_' + key)
+          if int(flat['reference_loaded_after_raw_result_persisted']) != 1:
+              raise SystemExit('REFERENCE_ORDER_AUDIT_INVALID')
+          for key in (
+              'rows','model_calls','json_parse_retries','predicted_matters','predicted_non_matter_sources',
+              'predicted_unresolved_sources','major_real_matters_found','major_real_matters_total',
+              'false_merge_matters','severe_split_reference_matters','strict_certain_concrete_sources',
+              'strict_certain_concrete_correct','strict_certain_admin_forced_into_matter',
+              'strict_certain_reference_unresolved','strict_certain_unresolved_preserved',
+              'unassigned_sources','overlapping_sources'
+          ):
+              print('full_context_' + key + '=' + str(int(flat[key])))
+          usage = raw.get('token_usage') or {}
+          print('full_context_prompt_tokens=' + str(int(usage.get('prompt_tokens') or 0)))
+          print('full_context_completion_tokens=' + str(int(usage.get('completion_tokens') or 0)))
+          print('full_context_total_tokens=' + str(int(usage.get('total_tokens') or 0)))
+          for name in required:
+              digest = hashlib.sha256((base / name).read_bytes()).hexdigest()
+              print('private_' + name.replace('.', '_') + '_sha256=' + digest)
+          print('RESEARCH_FULL_CONTEXT_MATTER_BASELINE_NUMERIC_AUDIT_PASS')
+          PY
+
+      - name: Persist private successful baseline result
+        if: steps.baseline.outputs.failed != 'true'
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/full-context-source/source"
+          base="l1/evaluation/vnext/runtime/research_full_context_matter_baseline"
+          input="l1/evaluation/vnext/runtime/full_context_matter_input"
+          eval_date="$(date -u +%F)"
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$root" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation "research_full_context_matter_baseline" \
+            --copy "$base/full_context_input.json=full_context_input.json" \
+            --copy "$base/full_context_raw_result.json=full_context_raw_result.json" \
+            --copy "$base/full_context_evaluation.json=full_context_evaluation.json" \
+            --copy "$base/full_context_evaluation.md=full_context_evaluation.md" \
+            --copy "$base/full_context_boss_summary.md=full_context_boss_summary.md" \
+            --copy "$base/flat.json=flat.json" \
+            --copy "$base/model_execution.log=model_execution.log" \
+            --copy "$base/model_execution_status.json=model_execution_status.json" \
+            --copy "$input/rehydration_summary.json=rehydration_summary.json"
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/full-context-source" "$RUNNER_TEMP/prepared-source-logs" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/t28-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
