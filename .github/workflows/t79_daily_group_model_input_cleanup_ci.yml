@@ -14,6 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - name: Publish safe locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "t79-daily-group-cleanup:${GITHUB_RUN_ID}" \
+            --body "Deterministic model-facing daily-group cleanup validation started. No company content is included here."
+
       - name: Checkout public harness
         uses: actions/checkout@v4
 
@@ -100,15 +109,6 @@ jobs:
             --evaluation research_daily_group_model_input_cleanup \
             --copy manifest.json=manifest.json \
             --copy build_summary.json=build_summary.json
-
-      - name: Publish safe locator
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "t79-daily-group-cleanup:${GITHUB_RUN_ID}" \
-            --body "Deterministic model-facing daily-group cleanup validation completed or attempted. No company content is included here."
 
       - name: Cleanup
         if: always()
