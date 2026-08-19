@@ -1,0 +1,1 @@
+t29 is the one-call Tangshang credential execution path for the frozen full-context Matter baseline. It performs no provider preflight and no retry.
