@@ -21,7 +21,7 @@ jobs:
         run: |
           gh issue create --repo "$GITHUB_REPOSITORY" \
             --title "t83-packet-residual-fix:${GITHUB_RUN_ID}" \
-            --body "Private packet residual cleanup validation started for exact source SHA c13c8a26cafd9b5cd7dd0157a79d269f19ec8a41. No company content is included here."
+            --body "Private packet residual cleanup validation started for exact source SHA 468393795d8e2c8f234a7b57d0f4d6c157955f8a. No company content is included here."
 
       - name: Checkout public harness
         uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xyh-nuage/knowledge
-          ref: c13c8a26cafd9b5cd7dd0157a79d269f19ec8a41
+          ref: 468393795d8e2c8f234a7b57d0f4d6c157955f8a
           token: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
           path: private-knowledge
           fetch-depth: 1
@@ -74,7 +74,6 @@ jobs:
           assert '语音（未转写，6秒）' in combined
           assert '\n消息24 | 2026-07-16 11:12:00 | 杨森🍀℡\n视频\n' not in combined
 
-          # Adjacent exact duplicate system events should be gone, but human repetition stays.
           header = re.compile(r'^消息(\d+) \| (.*?) \| (.*)$')
           duplicate_system = []
           for pid, text in packets.items():
@@ -94,7 +93,6 @@ jobs:
           human_repeat = '@Winter🍥\u2005亲，6.15货转的这个，是从6.16收下家仓储么'
           assert combined.count(human_repeat) >= 2
 
-          # Same-send generated filename prefix should collapse to one canonical file mention.
           median_candidates = [r for r in index if r['group_name']=='群聊_新创~诚泰通合作群' and r['date']=='2026-07-01']
           assert len(median_candidates) == 1
           median = packets[median_candidates[0]['packet_id']]
@@ -102,7 +100,6 @@ jobs:
           assert '20260701_南风知意，二小常欢_诚泰通新创267179079结算单.pdf' not in median
           assert '7月1日 11:22 | [系统]' not in median
 
-          # Same image represented once as an attachment and once as quote relation keeps relation but not a second preview.
           q_candidates = [r for r in index if r['group_name']=='群聊_新创-中泰大佑木薯淀粉' and r['date']=='2026-07-08']
           qtext = '\n'.join(packets[r['packet_id']] for r in q_candidates)
           qblocks=[]; cur=None
@@ -119,7 +116,6 @@ jobs:
           assert sum('图片内容：' in '\n'.join(b['body']) for b in related) == 1
           assert any('图片引用 Bonn 的消息' in '\n'.join(b['body']) for b in related)
 
-          # Second dense split day should now cut at the natural idle gap, keeping COA request and production certificate together.
           split_candidates = [r for r in index if r['group_name']=='群聊_新创-中泰大佑木薯淀粉' and r['date']=='2026-07-09']
           assert len(split_candidates) == 2
           holder = [r for r in split_candidates if '我想看看coa和生产日期' in packets[r['packet_id']]]
@@ -128,7 +124,7 @@ jobs:
           assert summary['natural_gap_split_boundary_count'] >= 1
 
           report = {
-            'source_sha':'c13c8a26cafd9b5cd7dd0157a79d269f19ec8a41',
+            'source_sha':'468393795d8e2c8f234a7b57d0f4d6c157955f8a',
             'summary':summary,
             'median_packet_id':median_candidates[0]['packet_id'],
             'july9_packet_ids':[r['packet_id'] for r in split_candidates],
@@ -149,7 +145,7 @@ jobs:
           eval_date="$(date -u +%F)"
           python scripts/private_results_publisher.py \
             --source-root "$RUNNER_TEMP/t83-private" \
-            --source-sha c13c8a26cafd9b5cd7dd0157a79d269f19ec8a41 \
+            --source-sha 468393795d8e2c8f234a7b57d0f4d6c157955f8a \
             --harness-sha "${{ github.sha }}" \
             --run-id "${{ github.run_id }}" \
             --date "$eval_date" \
