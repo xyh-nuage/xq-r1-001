@@ -102,13 +102,12 @@ jobs:
           chmod 700 "$askpass"
           export GIT_ASKPASS="$askpass"
           export GIT_TERMINAL_PROMPT=0
-          git -C "$repo" fetch -q --depth=1 origin "$frozen"
+          git -C "$repo" fetch -q --depth=1 origin "$frozen" "$result_commit"
           if ! git -C "$repo" diff --quiet "$frozen" "${{ steps.source.outputs.value }}" -- l1/l1_processor/local_semantics; then
             echo 'frozen_shared_local_semantics=MODIFIED'
             exit 3
           fi
           echo 'frozen_shared_local_semantics=UNCHANGED'
-          git -C "$repo" fetch -q --depth=1 origin "$result_commit"
           input_dir="$repo/l1/evaluation/research_local_fact_v2/runtime_input"
           mkdir -p "$input_dir"
           git -C "$repo" show "$result_commit:$predictions_path" > "$input_dir/seen10_predictions.jsonl"
@@ -142,8 +141,8 @@ jobs:
           L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           L1_LLM_MODEL: ${{ secrets.LLM_MODEL }}
           L1_LLM_TIMEOUT_SECONDS: '180'
-          L1_LLM_MAX_RETRIES: '1'
-          L1_LLM_RETRY_BACKOFF_SECONDS: '1'
+          L1_LLM_MAX_RETRIES: '4'
+          L1_LLM_RETRY_BACKOFF_SECONDS: '5'
           L1_LLM_MAX_COMPLETION_TOKENS: '3000'
           L1_LLM_MAX_COMPLETION_FIELD: 'max_tokens'
           L1_LLM_DISABLE_REASONING: 'true'
