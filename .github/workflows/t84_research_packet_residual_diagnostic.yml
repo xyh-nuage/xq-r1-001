@@ -36,6 +36,8 @@ jobs:
           path: private-knowledge
           fetch-depth: 1
       - name: Rebuild and persist selected packets
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
