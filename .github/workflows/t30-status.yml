@@ -1,0 +1,42 @@
+name: t30-status
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  publish:
+    if: github.event.issue.user.login == github.repository_owner && github.event.issue.title == 't30-status-request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Publish latest t30 run status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          payload="$(gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/t30.yml/runs?per_page=5")"
+          count="$(jq -r '.workflow_runs | length' <<<"$payload")"
+          if [ "$count" = "0" ]; then
+            gh issue create --repo "$GITHUB_REPOSITORY" --title 't30-status:none' --body 'No t30 workflow runs found.'
+            exit 0
+          fi
+          run_id="$(jq -r '.workflow_runs[0].id' <<<"$payload")"
+          status="$(jq -r '.workflow_runs[0].status' <<<"$payload")"
+          conclusion="$(jq -r '.workflow_runs[0].conclusion // "none"' <<<"$payload")"
+          head_sha="$(jq -r '.workflow_runs[0].head_sha' <<<"$payload")"
+          created="$(jq -r '.workflow_runs[0].created_at' <<<"$payload")"
+          [[ "$run_id" =~ ^[0-9]+$ ]]
+          [[ "$status" =~ ^[a-z_]+$ ]]
+          [[ "$conclusion" =~ ^[a-z_]+$ ]]
+          [[ "$head_sha" =~ ^[0-9a-f]{40}$ ]]
+          gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "t30-status:${run_id}:${status}:${conclusion}" \
+            --body "Safe t30 status. harness_sha=${head_sha}; created_at=${created}; no private source data included."
