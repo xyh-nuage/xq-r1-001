@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   run:
-    if: github.event.head_commit.message == 'ci: authorize one tiny shangtang call'
+    if: ${{ github.event.head_commit.message == 'ci: authorize one tiny shangtang call' }}
     environment: shangtang
     runs-on: ubuntu-latest
     timeout-minutes: 10
