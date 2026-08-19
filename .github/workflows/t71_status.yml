@@ -1,0 +1,20 @@
+name: t71-status
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t71_status.yml']
+permissions:
+  actions: read
+  contents: read
+  issues: write
+jobs:
+  status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report latest t71 status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow t71_group_identity_inventory.yml --limit 1 --json databaseId,status,conclusion,headSha,createdAt,updatedAt > /tmp/status.json
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "t71-status:${GITHUB_RUN_ID}" --body "$(cat /tmp/status.json)"
