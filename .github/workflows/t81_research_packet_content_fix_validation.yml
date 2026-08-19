@@ -21,7 +21,7 @@ jobs:
         run: |
           gh issue create --repo "$GITHUB_REPOSITORY" \
             --title "t81-packet-content-fix:${GITHUB_RUN_ID}" \
-            --body "Private research packet cleanup validation started for exact source SHA 85660ebf294e403d6b15b5ebdd2b9cc0bf8d8e10. No company content is included here."
+            --body "Private research packet cleanup validation started for exact source SHA e6f66a43d0fc329512e32043cfc74c840a60e392. No company content is included here."
 
       - name: Checkout public harness
         uses: actions/checkout@v4
@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xyh-nuage/knowledge
-          ref: 85660ebf294e403d6b15b5ebdd2b9cc0bf8d8e10
+          ref: e6f66a43d0fc329512e32043cfc74c840a60e392
           token: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
           path: private-knowledge
           fetch-depth: 1
@@ -75,16 +75,14 @@ jobs:
           dense = manifest['densest_group_days'][:5]
           first = dense[0]
           first_text = '\n'.join(packets[pid] for pid in first['packet_ids'])
-          # Previously observed exact duplicate attachments should now appear once per send block.
           assert first_text.count('文件：20260716_Liora_271476248放行单.pdf') == 1
           assert first_text.count('文件：20260716_Liora_271476248入境证明.pdf') == 1
-          # The COA/CIQ request and its immediate same-timestamp response must share one packet.
           holder = [pid for pid in first['packet_ids'] if '发一下COA和CIQ' in packets[pid]]
           assert len(holder) == 1
           assert 'CERTIFICATE OF ANALYSIS ORIGINAL' in packets[holder[0]]
 
           result = {
-            'source_sha':'85660ebf294e403d6b15b5ebdd2b9cc0bf8d8e10',
+            'source_sha':'e6f66a43d0fc329512e32043cfc74c840a60e392',
             'summary':json.loads((out/'build_summary.json').read_text(encoding='utf-8')),
             'densest_group_days':dense,
             'coaciq_packet_id':holder[0],
@@ -104,7 +102,7 @@ jobs:
           eval_date="$(date -u +%F)"
           python scripts/private_results_publisher.py \
             --source-root "$RUNNER_TEMP/t81-private" \
-            --source-sha 85660ebf294e403d6b15b5ebdd2b9cc0bf8d8e10 \
+            --source-sha e6f66a43d0fc329512e32043cfc74c840a60e392 \
             --harness-sha "${{ github.sha }}" \
             --run-id "${{ github.run_id }}" \
             --date "$eval_date" \
