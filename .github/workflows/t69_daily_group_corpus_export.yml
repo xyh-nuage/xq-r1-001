@@ -18,25 +18,33 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: xyh-nuage/knowledge
-          ref: 211919ca7128e091dcf6fa7742ae131603a32e27
+          ref: 55ece41718d85fe05ffdffb05e56b9bd9939dbfc
           token: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
           path: private-knowledge
           fetch-depth: 1
       - name: Verify exact source and tests
         run: |
           set -euo pipefail
-          test "$(git -C private-knowledge rev-parse HEAD)" = "211919ca7128e091dcf6fa7742ae131603a32e27"
+          test "$(git -C private-knowledge rev-parse HEAD)" = "55ece41718d85fe05ffdffb05e56b9bd9939dbfc"
           python -m pip install -q pytest
-          python -m pytest -q private-knowledge/l0/tests/test_export_research_daily_group_corpus.py
-      - name: Export full corpus
+          python -m pytest -q \
+            private-knowledge/l0/tests/test_export_research_daily_group_corpus.py \
+            private-knowledge/l0/tests/test_shard_research_daily_group_corpus.py
+      - name: Export and shard full corpus
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/t69"
+          mkdir -p "$RUNNER_TEMP/t69/shards"
           python private-knowledge/l0/tools/export_research_daily_group_corpus.py \
             --db private-knowledge/l0_state.db \
             --output-jsonl "$RUNNER_TEMP/t69/daily_group_corpus.jsonl" \
             --manifest "$RUNNER_TEMP/t69/daily_group_manifest.json" \
             | tee "$RUNNER_TEMP/t69/export_summary.txt"
+          python private-knowledge/l0/tools/shard_research_daily_group_corpus.py \
+            --input-jsonl "$RUNNER_TEMP/t69/daily_group_corpus.jsonl" \
+            --output-dir "$RUNNER_TEMP/t69/shards" \
+            --manifest "$RUNNER_TEMP/t69/daily_group_manifest.json" \
+            --max-shard-bytes 4000000 \
+            | tee "$RUNNER_TEMP/t69/shard_summary.txt"
           python - <<'PY'
           import json, os
           from pathlib import Path
@@ -44,6 +52,8 @@ jobs:
           m=json.loads((root/'daily_group_manifest.json').read_text(encoding='utf-8'))
           public={k:m[k] for k in ['source_messages_total_rows','source_messages_selected_rows','source_messages_missing_in_latest_snapshot','group_count','group_day_count','date_start','date_end','missing_day_message_count','cross_group_structured_relations_dropped']}
           public['corpus_bytes']=(root/'daily_group_corpus.jsonl').stat().st_size
+          public['shard_count']=m['corpus_persistence']['shard_count']
+          public['max_persisted_shard_bytes']=max(s['bytes'] for s in m['corpus_persistence']['shards'])
           (root/'public_summary.json').write_text(json.dumps(public,ensure_ascii=False,indent=2),encoding='utf-8')
           PY
       - name: Persist private corpus
@@ -51,16 +61,23 @@ jobs:
           KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
         run: |
           set -euo pipefail
+          copy_args=(
+            --copy daily_group_manifest.json=daily_group_manifest.json
+            --copy public_summary.json=public_summary.json
+          )
+          for path in "$RUNNER_TEMP"/t69/shards/daily_group_corpus.part-*.jsonl; do
+            name=$(basename "$path")
+            cp "$path" "$RUNNER_TEMP/t69/$name"
+            copy_args+=(--copy "$name=$name")
+          done
           python scripts/private_results_publisher.py \
             --source-root "$RUNNER_TEMP/t69" \
-            --source-sha 211919ca7128e091dcf6fa7742ae131603a32e27 \
+            --source-sha 55ece41718d85fe05ffdffb05e56b9bd9939dbfc \
             --harness-sha "$GITHUB_SHA" \
             --run-id "$GITHUB_RUN_ID" \
             --date 2026-08-19 \
             --evaluation research_daily_group_corpus_export_t69 \
-            --copy daily_group_corpus.jsonl=daily_group_corpus.jsonl \
-            --copy daily_group_manifest.json=daily_group_manifest.json \
-            --copy public_summary.json=public_summary.json \
+            "${copy_args[@]}" \
             2>&1 | tee "$RUNNER_TEMP/t69-persist.log"
       - name: Report public-safe summary
         if: always()
@@ -68,7 +85,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           {
-            echo 'source_sha=211919ca7128e091dcf6fa7742ae131603a32e27'
+            echo 'source_sha=55ece41718d85fe05ffdffb05e56b9bd9939dbfc'
             echo 'provider_call_count=0'
             cat "$RUNNER_TEMP/t69/public_summary.json" 2>/dev/null || true
             echo
