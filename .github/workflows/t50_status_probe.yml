@@ -1,0 +1,19 @@
+name: t50-status-probe
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/t50_status_probe.yml']
+permissions:
+  actions: read
+  issues: write
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect t50 runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --repo "$GITHUB_REPOSITORY" --workflow t50_immutable_first48_low3000.yml --limit 5 --json databaseId,status,conclusion,headSha,createdAt,updatedAt > /tmp/t50.json
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "t50-status:${GITHUB_RUN_ID}" --body "$(cat /tmp/t50.json)"
