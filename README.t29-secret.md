@@ -1,0 +1,1 @@
+For t29, the Tangshang credential is read from the GitHub secret named FLASH and mapped to TANGSHANG_API_KEY at runtime. The execution still permits exactly one provider HTTP call and no retry.
