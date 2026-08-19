@@ -1,0 +1,154 @@
+name: t27
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: exact private Research source commit
+        required: true
+        type: string
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t27:'))
+    environment: deepseek
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "${{ github.repository }}" --title "t27-c-stage-vnext-provider-preflight-run:${{ github.run_id }}" --body "Safe run locator for synthetic DeepSeek availability preflight. No company content is sent to the model."
+
+      - name: Resolve source and harness SHAs
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            source="${REQUEST_TITLE#rq:t27:}"
+            harness="$REQUEST_HARNESS_SHA"
+          else
+            source="$DISPATCH_SHA"
+            harness="$CURRENT_HARNESS_SHA"
+          fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness_sha=INVALID'; exit 2; }
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Prepare exact private source
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/c-stage-vnext-provider-source"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t27-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          python -m pip install -q cryptography -e "$repo/l1"
+          echo 'research_vnext_provider_source=VERIFIED_EXACT_SHA'
+
+      - name: Synthetic DeepSeek provider preflight
+        id: provider
+        shell: bash
+        env:
+          PYTHONPATH: ${{ runner.temp }}/c-stage-vnext-provider-source/l1
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY || secrets.L1_LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL || secrets.L1_LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL || secrets.L1_LLM_MODEL }}
+          L1_LLM_TIMEOUT_SECONDS: '30'
+          L1_LLM_MAX_RETRIES: '0'
+          L1_LLM_RETRY_BACKOFF_SECONDS: '0'
+          L1_LLM_MAX_COMPLETION_TOKENS: '3000'
+          L1_LLM_MAX_COMPLETION_FIELD: max_tokens
+          L1_LLM_DISABLE_REASONING: 'true'
+        run: |
+          python - <<'PY'
+          import os
+          from l1_processor.llm_client import OpenAICompatibleClient, CategorizedLLMError
+          client = OpenAICompatibleClient.from_env()
+          if 'deepseek' not in str(client.model_id).lower():
+              raise SystemExit('provider_model=NOT_DEEPSEEK')
+          try:
+              result = client.complete_json(
+                  'Return only one JSON object with key status and value ok. No commentary.',
+                  {'provider_preflight': True, 'contains_company_content': False},
+              )
+          except CategorizedLLMError as exc:
+              status = int(exc.status_code or 0)
+              print('provider_available=0')
+              print('provider_error_category=' + str(exc.category))
+              print('provider_http_status=' + str(status))
+              if status == 402:
+                  with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+                      fh.write('available=false\nstatus=402\n')
+                  raise SystemExit(0)
+              raise
+          if not isinstance(result.data, dict):
+              raise SystemExit('provider_response=INVALID_JSON_OBJECT')
+          print('provider_available=1')
+          print('provider_http_status=200')
+          print('provider_model=deepseek')
+          print('provider_prompt_tokens=' + str(int(result.prompt_tokens or 0)))
+          print('provider_completion_tokens=' + str(int(result.completion_tokens or 0)))
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as fh:
+              fh.write('available=true\nstatus=200\n')
+          PY
+
+      - name: Record preflight conclusion
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.provider.outputs.available }}" = "true" ]; then
+            echo 'RESEARCH_C_STAGE_VNEXT_DEEPSEEK_PREFLIGHT_PASS'
+          elif [ "${{ steps.provider.outputs.status }}" = "402" ]; then
+            echo 'RESEARCH_C_STAGE_VNEXT_DEEPSEEK_BLOCKED_HTTP_402'
+          else
+            echo 'RESEARCH_C_STAGE_VNEXT_DEEPSEEK_PREFLIGHT_UNKNOWN'
+            exit 1
+          fi
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/c-stage-vnext-provider-source" "$RUNNER_TEMP/t27-read-askpass.sh"
