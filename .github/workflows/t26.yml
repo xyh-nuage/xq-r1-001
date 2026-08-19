@@ -95,28 +95,6 @@ jobs:
           unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
           echo 'research_vnext_phase1_source=VERIFIED_EXACT_SHA'
 
-      - name: Diagnose synthetic Phase-1 runner import contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$RUNNER_TEMP/c-stage-vnext-phase1-source"
-          python - <<'PY'
-          import importlib.util
-          from pathlib import Path
-          path = Path('l1/tools/run_research_c_stage_vnext_gap_retrieval.py').resolve()
-          spec = importlib.util.spec_from_file_location('t26_safe_phase1_import_probe', path)
-          module = importlib.util.module_from_spec(spec)
-          try:
-              assert spec and spec.loader
-              spec.loader.exec_module(module)
-          except Exception as exc:
-              print('phase1_import=FAIL')
-              print('phase1_import_error_type=' + type(exc).__name__)
-              print('phase1_import_error=' + str(exc).replace('\n', ' ')[:300])
-          else:
-              print('phase1_import=PASS')
-          PY
-
       - name: Run deterministic Phase-1 contract gate
         shell: bash
         run: |
