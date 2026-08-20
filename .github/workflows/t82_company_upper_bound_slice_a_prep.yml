@@ -98,11 +98,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          repo="$GITHUB_WORKSPACE/private-knowledge"
           base="company/evaluation/matter_capability_upper_bound_slice_a/prepared"
+          source_root="$RUNNER_TEMP/t82-result-source"
+          rm -rf "$source_root"
+          mkdir -p "$source_root/$base"
+          cp "$GITHUB_WORKSPACE/private-knowledge/$base/manifest.json" "$source_root/$base/manifest.json"
+          cp "$GITHUB_WORKSPACE/private-knowledge/$base/safe_validation.json" "$source_root/$base/safe_validation.json"
+          cp "$GITHUB_WORKSPACE/private-knowledge/$base/all_groups_timeline.model.txt" "$source_root/$base/all_groups_timeline.model.txt"
+          cp "$GITHUB_WORKSPACE/private-knowledge/$base/all_groups_timeline.private.jsonl" "$source_root/$base/all_groups_timeline.private.jsonl"
+          cp "$GITHUB_WORKSPACE/private-knowledge/$base/business_background.model.md" "$source_root/$base/business_background.model.md"
           eval_date="$(date -u +%F)"
           python scripts/private_results_publisher.py \
-            --source-root "$repo" \
+            --source-root "$source_root" \
             --source-sha c1169ec9a1c7dece8f66e71d15f59fb9ec61cca0 \
             --harness-sha "${{ github.sha }}" \
             --run-id "${{ github.run_id }}" \
@@ -127,4 +134,4 @@ jobs:
       - name: Cleanup
         if: always()
         shell: bash
-        run: rm -rf private-knowledge "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
+        run: rm -rf private-knowledge "$RUNNER_TEMP/t82-result-source" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
