@@ -1,0 +1,142 @@
+name: ark-coding-api-smoke
+
+on:
+  push:
+    branches:
+      - probe/ark-coding-api-smoke-001
+    paths:
+      - .github/workflows/ark_coding_api_smoke.yml
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    environment: ark
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ARK_API_KEY_DIRECT: ${{ secrets.ARK_API_KEY }}
+      ARK_API_KEY_GENERIC: ${{ secrets.LLM_API_KEY }}
+    steps:
+      - name: Probe Ark Coding Plan API
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          key = os.environ.get("ARK_API_KEY_DIRECT") or os.environ.get("ARK_API_KEY_GENERIC")
+          if not key:
+              raise SystemExit("ARK_KEY=MISSING (checked ARK_API_KEY and LLM_API_KEY)")
+
+          coding_base = "https://ark.cn-beijing.volces.com/api/coding/v3"
+          online_base = "https://ark.cn-beijing.volces.com/api/v3"
+          headers = {
+              "Authorization": f"Bearer {key}",
+              "Content-Type": "application/json",
+          }
+
+          def request(method, url, payload=None):
+              data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
+              try:
+                  with urllib.request.urlopen(req, timeout=45) as r:
+                      body = r.read().decode("utf-8", errors="replace")
+                      return r.status, body
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode("utf-8", errors="replace")
+                  return e.code, body
+              except Exception as e:
+                  return -1, f"{type(e).__name__}: {e}"
+
+          def parse_json(body):
+              try:
+                  return json.loads(body)
+              except Exception:
+                  return None
+
+          print("=== 1) Coding Plan GET /models ===")
+          status, body = request("GET", coding_base + "/models")
+          print("status=", status)
+          obj = parse_json(body)
+          if isinstance(obj, dict) and isinstance(obj.get("data"), list):
+              ids = [x.get("id") for x in obj["data"] if isinstance(x, dict) and x.get("id")]
+              print("model_ids=", ids[:50])
+          else:
+              print("body_preview=", body[:600].replace(key, "***"))
+
+          print("=== 2) Online inference GET /models (discovery only, no generation) ===")
+          status, body = request("GET", online_base + "/models")
+          print("status=", status)
+          obj = parse_json(body)
+          if isinstance(obj, dict) and isinstance(obj.get("data"), list):
+              ids = [x.get("id") for x in obj["data"] if isinstance(x, dict) and x.get("id")]
+              ds = [x for x in ids if "deepseek" in x.lower()]
+              print("deepseek_model_ids=", ds[:50])
+          else:
+              print("body_preview=", body[:600].replace(key, "***"))
+
+          print("=== 3) Coding Plan POST /chat/completions, model=deepseek-v3.2 ===")
+          chat_payload = {
+              "model": "deepseek-v3.2",
+              "messages": [{"role": "user", "content": "Reply exactly PONG."}],
+              "stream": False,
+              "max_tokens": 16,
+          }
+          status, body = request("POST", coding_base + "/chat/completions", chat_payload)
+          print("status=", status)
+          obj = parse_json(body)
+          if isinstance(obj, dict):
+              print("object=", obj.get("object"))
+              print("model=", obj.get("model"))
+              choices = obj.get("choices") or []
+              content = None
+              finish = None
+              if choices and isinstance(choices[0], dict):
+                  msg = choices[0].get("message") or {}
+                  if isinstance(msg, dict):
+                      content = msg.get("content")
+                  finish = choices[0].get("finish_reason")
+              print("content=", content)
+              print("finish_reason=", finish)
+              print("usage=", obj.get("usage"))
+              if status >= 400:
+                  print("error=", obj.get("error"))
+          else:
+              print("body_preview=", body[:1000].replace(key, "***"))
+
+          print("=== 4) Coding Plan POST /responses, model=deepseek-v3.2 ===")
+          responses_payload = {
+              "model": "deepseek-v3.2",
+              "input": "Reply exactly PONG.",
+              "max_output_tokens": 16,
+          }
+          status, body = request("POST", coding_base + "/responses", responses_payload)
+          print("status=", status)
+          obj = parse_json(body)
+          if isinstance(obj, dict):
+              print("object=", obj.get("object"))
+              print("model=", obj.get("model"))
+              print("status_field=", obj.get("status"))
+              text = obj.get("output_text")
+              if text is None:
+                  for item in obj.get("output") or []:
+                      if not isinstance(item, dict):
+                          continue
+                      for part in item.get("content") or []:
+                          if isinstance(part, dict) and part.get("text"):
+                              text = part.get("text")
+                              break
+                      if text:
+                          break
+              print("output_text=", text)
+              print("usage=", obj.get("usage"))
+              if status >= 400:
+                  print("error=", obj.get("error"))
+          else:
+              print("body_preview=", body[:1000].replace(key, "***"))
+          PY
