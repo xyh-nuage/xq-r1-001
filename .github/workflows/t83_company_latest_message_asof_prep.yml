@@ -1,0 +1,127 @@
+name: t83-company-latest-message-asof-prep
+
+on:
+  push:
+    branches: [ci/company-latest-message-asof-prep-001]
+    paths: ['.github/workflows/t83_company_latest_message_asof_prep.yml']
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Publish safe locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "t83-company-latest-asof:${GITHUB_RUN_ID}" \
+            --body "Private deterministic latest-message as-of context preparation for exact knowledge source 55b34a4b573faf26824b95f2952080bbac6afd14. No company message content is included here."
+
+      - name: Checkout public harness
+        uses: actions/checkout@v4
+
+      - name: Verify private result write access
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python scripts/private_results_preflight.py
+
+      - name: Checkout exact private Company source
+        uses: actions/checkout@v4
+        with:
+          repository: xyh-nuage/knowledge
+          ref: 55b34a4b573faf26824b95f2952080bbac6afd14
+          token: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+          path: private-knowledge
+          fetch-depth: 1
+
+      - name: Compile and run focused tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q pytest
+          cd private-knowledge
+          python -m py_compile company/tools/build_company_latest_message_asof_context.py company/tools/run_company_latest_message_upper_bound.py
+          python -m pytest -q company/tests/test_company_latest_message_asof_context.py
+
+      - name: Build latest-message as-of context pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="private-knowledge/company/evaluation/matter_capability_upper_bound_slice_a/latest_message_context_asof_20260707_153400"
+          rm -rf "$out"
+          python private-knowledge/company/tools/build_company_latest_message_asof_context.py --output-dir "$out"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('private-knowledge/company/evaluation/matter_capability_upper_bound_slice_a/latest_message_context_asof_20260707_153400/manifest.json')
+          m=json.loads(p.read_text(encoding='utf-8'))
+          safe={
+            'cutoff':m['cutoff'],
+            'current_context_id':m['current_context_id'],
+            'current_target_number':m['current_target_number'],
+            'visible_messages':m['chat']['visible_message_count'],
+            'prior_messages':m['chat']['prior_message_count'],
+            'groups':m['chat']['group_count'],
+            'shipping_rows_asof':m['external_sources']['02_shipping_schedules_and_bl.csv']['included_rows'],
+            'purchase_rows_asof':m['external_sources']['03_purchase_contracts.csv']['included_rows'],
+            'sales_rows_asof':m['external_sources']['04_sales_contracts.csv']['included_rows'],
+            'lc_rows_asof':m['external_sources']['05_financial_lc_and_payment.csv']['lc_included_rows'],
+            'payment_rows_asof':m['external_sources']['05_financial_lc_and_payment.csv']['payment_included_rows'],
+            'dated_paid_events':m['external_sources']['05_financial_lc_and_payment.csv']['dated_paid_event_count'],
+            'packet_sha256':m['output_files']['latest_message_context_packet.model.md']['sha256'],
+          }
+          print('COMPANY_LATEST_ASOF_SAFE='+json.dumps(safe, sort_keys=True))
+          (p.parent/'safe_validation.json').write_text(json.dumps(safe, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+          PY
+
+      - name: Persist private prepared context pack
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="company/evaluation/matter_capability_upper_bound_slice_a/latest_message_context_asof_20260707_153400"
+          source_root="$RUNNER_TEMP/t83-result-source"
+          rm -rf "$source_root"
+          mkdir -p "$source_root/$base"
+          for f in manifest.json safe_validation.json current_message.model.txt prior_chat_timeline.model.txt group_roles_assumed_prior.model.md business_records_asof.model.md latest_message_context_packet.model.md; do
+            cp "$GITHUB_WORKSPACE/private-knowledge/$base/$f" "$source_root/$base/$f"
+          done
+          eval_date="$(date -u +%F)"
+          python scripts/private_results_publisher.py \
+            --source-root "$source_root" \
+            --source-sha 55b34a4b573faf26824b95f2952080bbac6afd14 \
+            --harness-sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation company_latest_message_asof_context \
+            --copy "$base/manifest.json=manifest.json" \
+            --copy "$base/safe_validation.json=safe_validation.json" \
+            --copy "$base/current_message.model.txt=current_message.model.txt" \
+            --copy "$base/prior_chat_timeline.model.txt=prior_chat_timeline.model.txt" \
+            --copy "$base/group_roles_assumed_prior.model.md=group_roles_assumed_prior.model.md" \
+            --copy "$base/business_records_asof.model.md=business_records_asof.model.md" \
+            --copy "$base/latest_message_context_packet.model.md=latest_message_context_packet.model.md"
+
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'COMPANY_LATEST_MESSAGE_ASOF_PREP_PASS'
+          echo 'model_calls=0'
+          echo 'current_context=CTX0272'
+          echo 'cutoff=2026-07-07T15:34:00'
+          echo 'future_mutable_state_included=0'
+          echo 'gold_model_input=0'
+          echo 'merge_performed=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf private-knowledge "$RUNNER_TEMP/t83-result-source" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
