@@ -1,6 +1,6 @@
 name: ark-header-smoke
 
-# probe-version: 2
+# probe-version: 3
 on:
   push:
     branches: [main]
@@ -18,70 +18,33 @@ jobs:
     timeout-minutes: 10
     env:
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
-      LLM_MODEL: ${{ secrets.LLM_MODEL }}
     steps:
-      - name: Probe Ark DeepSeek plan combinations
+      - name: Probe Ark Coding Plan routed model
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
           python - <<'PY' | tee /tmp/ark_smoke.txt
-          import json, os, sys, urllib.error, urllib.request
-
-          key = (os.getenv('LLM_API_KEY') or '').strip()
-          if key.lower().startswith('bearer '): key = key[7:].strip()
-          configured_base = (os.getenv('LLM_BASE_URL') or '').rstrip('/')
-          configured_model = os.getenv('LLM_MODEL') or ''
-          print('config.llm_api_key_present=' + str(bool(key)).lower())
-          print('config.llm_base_url_present=' + str(bool(configured_base)).lower())
-          print('config.llm_model_present=' + str(bool(configured_model)).lower())
-          if not key:
-              print('ARK_DEEPSEEK_MATRIX=CONFIG_MISSING')
-              sys.exit(2)
-
+          import json, os, urllib.error, urllib.request
+          key=(os.getenv('LLM_API_KEY') or '').strip()
+          if key.lower().startswith('bearer '): key=key[7:].strip()
           headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','Accept':'application/json'}
-
           def call(name, endpoint, payload):
-              req=urllib.request.Request(endpoint,data=json.dumps(payload,ensure_ascii=False).encode(),method='POST',headers=headers)
+              req=urllib.request.Request(endpoint,data=json.dumps(payload).encode(),method='POST',headers=headers)
               try:
                   with urllib.request.urlopen(req,timeout=60) as resp:
-                      raw=resp.read().decode('utf-8','replace')
-                      obj=json.loads(raw)
-                      text=''
-                      if 'output' in obj:
-                          parts=[]
-                          for item in obj.get('output',[]) or []:
-                              for p in item.get('content',[]) or []:
-                                  if p.get('type')=='output_text' and p.get('text'): parts.append(p['text'])
-                          text=' '.join(parts)
-                      else:
+                      obj=json.loads(resp.read().decode())
+                      if 'choices' in obj:
                           text=(((obj.get('choices') or [{}])[0].get('message') or {}).get('content') or '')
+                      else:
+                          text=' '.join(p.get('text','') for i in obj.get('output',[]) or [] for p in i.get('content',[]) or [] if p.get('type')=='output_text')
                       print(f'case={name} status={resp.status} PASS reply={text[:160]!r}')
-                      return True
               except urllib.error.HTTPError as e:
                   body=e.read().decode('utf-8','replace')[:700].replace('\n',' ')
                   print(f'case={name} status={e.code} FAIL error={body!r}')
-                  return False
-              except Exception as e:
-                  print(f'case={name} transport={type(e).__name__}:{e}')
-                  return False
-
-          results=[]
-          results.append(call('coding_responses_deepseek_v3_2',
-              'https://ark.cn-beijing.volces.com/api/coding/v3/responses',
-              {'model':'deepseek-v3.2','input':'hello'}))
-          results.append(call('coding_chat_deepseek_v3_2',
-              'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions',
-              {'model':'deepseek-v3.2','messages':[{'role':'user','content':'hello'}],'max_tokens':32,'stream':False}))
-          if configured_base and configured_model:
-              endpoint=configured_base if configured_base.endswith('/chat/completions') else configured_base+'/chat/completions'
-              results.append(call('configured_env_chat',endpoint,
-                  {'model':configured_model,'messages':[{'role':'user','content':'hello'}],'max_tokens':32,'stream':False}))
-          print('pass_count=' + str(sum(results)) + '/' + str(len(results)))
-          print('ARK_DEEPSEEK_MATRIX=' + ('PASS' if any(results) else 'FAIL'))
+          call('coding_chat_ark_code_latest','https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions',{'model':'ark-code-latest','messages':[{'role':'user','content':'hello'}],'max_tokens':32,'stream':False})
+          call('coding_responses_ark_code_latest','https://ark.cn-beijing.volces.com/api/coding/v3/responses',{'model':'ark-code-latest','input':'hello'})
           PY
-
       - name: Publish sanitized result
         if: always()
         env:
@@ -89,8 +52,6 @@ jobs:
         shell: bash
         run: |
           body="$(cat /tmp/ark_smoke.txt 2>/dev/null || printf '%s\n' 'no probe output')"
-          gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "ark-deepseek-plan-smoke:${GITHUB_RUN_ID}" \
-            --body "\`\`\`text
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "ark-routed-model-smoke:${GITHUB_RUN_ID}" --body "\`\`\`text
           $body
           \`\`\`"
