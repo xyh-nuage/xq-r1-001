@@ -23,7 +23,7 @@ jobs:
       ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
       ARK_MODEL: ${{ secrets.ARK_MODEL }}
     steps:
-      - name: Probe Ark header compatibility
+      - name: Probe Ark credential header normalization
         continue-on-error: true
         shell: bash
         run: |
@@ -36,22 +36,25 @@ jobs:
           import urllib.parse
           import urllib.request
 
-          key = os.getenv('LLM_API_KEY') or os.getenv('ARK_API_KEY') or ''
+          llm_key = os.getenv('LLM_API_KEY') or ''
+          ark_key = os.getenv('ARK_API_KEY') or ''
           base = os.getenv('LLM_BASE_URL') or os.getenv('ARK_BASE_URL') or 'https://ark.cn-beijing.volces.com/api/v3'
           model = os.getenv('LLM_MODEL') or os.getenv('ARK_MODEL') or ''
 
-          print('config.key_present=' + str(bool(key)).lower())
-          print('config.model_present=' + str(bool(model)).lower())
-          print('config.base_source=' + ('secret' if (os.getenv('LLM_BASE_URL') or os.getenv('ARK_BASE_URL')) else 'official_default'))
+          print('config.llm_api_key_present=' + str(bool(llm_key)).lower())
+          print('config.ark_api_key_present=' + str(bool(ark_key)).lower())
+          print('config.llm_model_present=' + str(bool(os.getenv('LLM_MODEL'))).lower())
+          print('config.ark_model_present=' + str(bool(os.getenv('ARK_MODEL'))).lower())
+          print('config.llm_base_url_present=' + str(bool(os.getenv('LLM_BASE_URL'))).lower())
+          print('config.ark_base_url_present=' + str(bool(os.getenv('ARK_BASE_URL'))).lower())
           print('config.host=' + (urllib.parse.urlparse(base).hostname or 'invalid'))
 
-          if not key or not model:
+          if (not llm_key and not ark_key) or not model:
               print('ARK_SMOKE=CONFIG_MISSING')
               sys.exit(2)
 
           base = base.rstrip('/')
           endpoint = base if base.endswith('/chat/completions') else base + '/chat/completions'
-
           payload = json.dumps({
               'model': model,
               'messages': [{'role': 'user', 'content': 'Reply with exactly: pong'}],
@@ -59,60 +62,73 @@ jobs:
               'stream': False,
           }, ensure_ascii=False).encode('utf-8')
 
-          cases = [
-              ('canonical_bearer_json', {
-                  'Authorization': f'Bearer {key}',
-                  'Content-Type': 'application/json',
-              }),
-              ('canonical_plus_accept', {
-                  'Authorization': f'Bearer {key}',
+          def normalized_key(raw):
+              s = raw.strip()
+              if len(s) >= 2 and s[0] == s[-1] and s[0] in ('\"', "'"):
+                  s = s[1:-1].strip()
+              if s.lower().startswith('bearer '):
+                  s = s[7:].strip()
+              return s
+
+          def run_case(name, auth_value):
+              headers = {
+                  'Authorization': auth_value,
                   'Content-Type': 'application/json',
                   'Accept': 'application/json',
-              }),
-              ('bearer_without_content_type', {
-                  'Authorization': f'Bearer {key}',
-              }),
-              ('raw_authorization_json', {
-                  'Authorization': key,
-                  'Content-Type': 'application/json',
-              }),
-              ('x_api_key_json', {
-                  'X-API-Key': key,
-                  'Content-Type': 'application/json',
-              }),
-              ('no_auth_json', {
-                  'Content-Type': 'application/json',
-              }),
-          ]
-
-          success = 0
-          for name, headers in cases:
+              }
               req = urllib.request.Request(endpoint, data=payload, method='POST', headers=headers)
               try:
                   with urllib.request.urlopen(req, timeout=45) as resp:
                       raw = resp.read().decode('utf-8', 'replace')
-                      status = resp.status
-                      ctype = resp.headers.get('Content-Type', '')
                       reply = ''
                       try:
                           obj = json.loads(raw)
                           reply = (((obj.get('choices') or [{}])[0].get('message') or {}).get('content') or '')
                       except Exception:
                           pass
-                      print(f'case={name} status={status} response_content_type={ctype!r} reply={reply[:80]!r}')
-                      if 200 <= status < 300:
-                          success += 1
+                      print(f'case={name} status={resp.status} reply={reply[:80]!r}')
+                      return resp.status
               except urllib.error.HTTPError as e:
                   body = e.read().decode('utf-8', 'replace')[:500].replace('\n', ' ')
                   print(f'case={name} status={e.code} http_error={body!r}')
+                  return e.code
               except Exception as e:
                   print(f'case={name} transport_error={type(e).__name__}:{e}')
+                  return 0
 
-          print(f'cases_2xx={success}/{len(cases)}')
-          if success:
-              print('ARK_SMOKE=AT_LEAST_ONE_HEADER_SET_WORKS')
+          results = []
+          for source, raw in [('LLM_API_KEY', llm_key), ('ARK_API_KEY', ark_key)]:
+              if not raw:
+                  continue
+              stripped = raw.strip()
+              norm = normalized_key(raw)
+              print(f'{source}.edge_whitespace=' + str(raw != stripped).lower())
+              print(f'{source}.bearer_prefix=' + str(stripped.lower().startswith('bearer ')).lower())
+              print(f'{source}.outer_quotes=' + str(len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in ('\"', "'")).lower())
+              candidates = [
+                  ('bearer_as_stored', 'Bearer ' + raw),
+                  ('bearer_stripped', 'Bearer ' + stripped),
+                  ('bearer_normalized', 'Bearer ' + norm),
+                  ('raw_header_stripped', stripped),
+              ]
+              seen = set()
+              for variant, auth in candidates:
+                  if auth in seen:
+                      continue
+                  seen.add(auth)
+                  status = run_case(source + ':' + variant, auth)
+                  results.append((source, variant, status))
+                  if 200 <= status < 300:
+                      break
+
+          ok = [r for r in results if 200 <= r[2] < 300]
+          non401 = [r for r in results if r[2] not in (0, 401)]
+          print(f'auth_success_cases={len(ok)}')
+          print(f'non_401_cases={len(non401)}')
+          if ok:
+              print('ARK_SMOKE=AUTH_WORKS')
               sys.exit(0)
-          print('ARK_SMOKE=NO_HEADER_SET_WORKS')
+          print('ARK_SMOKE=AUTH_STILL_REJECTED')
           sys.exit(3)
           PY
 
