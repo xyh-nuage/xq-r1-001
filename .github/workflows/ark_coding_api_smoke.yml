@@ -1,4 +1,4 @@
-name: ark-coding-api-smoke
+name: ark-plan-api-smoke
 
 on:
   push:
@@ -20,110 +20,102 @@ jobs:
       ARK_API_KEY_DIRECT: ${{ secrets.ARK_API_KEY }}
       ARK_API_KEY_GENERIC: ${{ secrets.LLM_API_KEY }}
     steps:
-      - name: Probe Ark Coding Plan API
+      - name: Probe Ark plan endpoints
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY' | tee /tmp/ark_probe.txt
-          import json
-          import os
-          import urllib.error
-          import urllib.request
+          import json, os, urllib.error, urllib.request
 
           key = os.environ.get("ARK_API_KEY_DIRECT") or os.environ.get("ARK_API_KEY_GENERIC")
           if not key:
-              raise SystemExit("ARK_KEY=MISSING (checked ARK_API_KEY and LLM_API_KEY)")
+              raise SystemExit("ARK_KEY=MISSING")
 
-          coding_base = "https://ark.cn-beijing.volces.com/api/coding/v3"
-          online_base = "https://ark.cn-beijing.volces.com/api/v3"
+          bases = {
+              "coding": "https://ark.cn-beijing.volces.com/api/coding/v3",
+              "plan": "https://ark.cn-beijing.volces.com/api/plan/v3",
+          }
           headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
           def request(method, url, payload=None):
               data = None if payload is None else json.dumps(payload).encode()
               req = urllib.request.Request(url, data=data, headers=headers, method=method)
               try:
-                  with urllib.request.urlopen(req, timeout=45) as r:
+                  with urllib.request.urlopen(req, timeout=60) as r:
                       return r.status, r.read().decode("utf-8", errors="replace")
               except urllib.error.HTTPError as e:
                   return e.code, e.read().decode("utf-8", errors="replace")
               except Exception as e:
                   return -1, f"{type(e).__name__}: {e}"
 
-          def obj(body):
-              try:
-                  return json.loads(body)
-              except Exception:
-                  return None
+          def load(body):
+              try: return json.loads(body)
+              except Exception: return None
 
-          print("=== coding GET /models ===")
-          status, body = request("GET", coding_base + "/models")
-          print("status=", status)
-          data = obj(body)
-          if isinstance(data, dict) and isinstance(data.get("data"), list):
-              print("model_ids=", [x.get("id") for x in data["data"] if isinstance(x, dict) and x.get("id")][:50])
-          else:
-              print("body_preview=", body[:600].replace(key, "***"))
-
-          print("=== online GET /models (discovery only) ===")
-          status, body = request("GET", online_base + "/models")
-          print("status=", status)
-          data = obj(body)
-          if isinstance(data, dict) and isinstance(data.get("data"), list):
-              ids = [x.get("id") for x in data["data"] if isinstance(x, dict) and x.get("id")]
-              print("deepseek_model_ids=", [x for x in ids if "deepseek" in x.lower()][:50])
-          else:
-              print("body_preview=", body[:600].replace(key, "***"))
-
-          print("=== coding POST /chat/completions model=deepseek-v3.2 ===")
-          status, body = request("POST", coding_base + "/chat/completions", {
-              "model": "deepseek-v3.2",
-              "messages": [{"role": "user", "content": "Reply exactly PONG."}],
-              "stream": False,
-              "max_tokens": 16,
-          })
-          print("status=", status)
-          data = obj(body)
-          if isinstance(data, dict):
-              choices = data.get("choices") or []
-              msg = choices[0].get("message") if choices and isinstance(choices[0], dict) else {}
-              print("object=", data.get("object"))
-              print("model=", data.get("model"))
-              print("content=", msg.get("content") if isinstance(msg, dict) else None)
-              print("finish_reason=", choices[0].get("finish_reason") if choices else None)
-              print("usage=", data.get("usage"))
-              if status >= 400:
+          def show_error(data, body):
+              if isinstance(data, dict) and data.get("error"):
                   print("error=", data.get("error"))
-          else:
-              print("body_preview=", body[:1000].replace(key, "***"))
+              elif body:
+                  print("body_preview=", body[:700].replace(key, "***"))
 
-          print("=== coding POST /responses model=deepseek-v3.2 ===")
-          status, body = request("POST", coding_base + "/responses", {
-              "model": "deepseek-v3.2",
-              "input": "Reply exactly PONG.",
-              "max_output_tokens": 16,
-          })
-          print("status=", status)
-          data = obj(body)
-          if isinstance(data, dict):
-              text = data.get("output_text")
-              if text is None:
-                  for item in data.get("output") or []:
-                      if isinstance(item, dict):
-                          for part in item.get("content") or []:
-                              if isinstance(part, dict) and part.get("text"):
-                                  text = part["text"]
-                                  break
-                      if text:
-                          break
-              print("object=", data.get("object"))
-              print("model=", data.get("model"))
-              print("status_field=", data.get("status"))
-              print("output_text=", text)
-              print("usage=", data.get("usage"))
-              if status >= 400:
-                  print("error=", data.get("error"))
-          else:
-              print("body_preview=", body[:1000].replace(key, "***"))
+          for label, base in bases.items():
+              print(f"=== {label} GET /models ===")
+              status, body = request("GET", base + "/models")
+              print("status=", status)
+              data = load(body)
+              if isinstance(data, dict) and isinstance(data.get("data"), list):
+                  ids = [x.get("id") for x in data["data"] if isinstance(x, dict) and x.get("id")]
+                  print("deepseek_ids=", [x for x in ids if "deepseek" in x.lower()])
+              else:
+                  show_error(data, body)
+
+          for label, base in bases.items():
+              for model in ("deepseek-v4-flash", "deepseek-v4-pro"):
+                  print(f"=== {label} POST /chat/completions model={model} ===")
+                  status, body = request("POST", base + "/chat/completions", {
+                      "model": model,
+                      "messages": [{"role": "user", "content": "Reply exactly PONG."}],
+                      "stream": False,
+                      "max_tokens": 16,
+                  })
+                  print("status=", status)
+                  data = load(body)
+                  if isinstance(data, dict) and status < 400:
+                      choices = data.get("choices") or []
+                      msg = choices[0].get("message") if choices and isinstance(choices[0], dict) else {}
+                      print("object=", data.get("object"))
+                      print("model=", data.get("model"))
+                      print("content=", msg.get("content") if isinstance(msg, dict) else None)
+                      print("usage=", data.get("usage"))
+                  else:
+                      show_error(data, body)
+
+          for label, base in bases.items():
+              print(f"=== {label} POST /responses model=deepseek-v4-flash ===")
+              status, body = request("POST", base + "/responses", {
+                  "model": "deepseek-v4-flash",
+                  "input": "Reply exactly PONG.",
+                  "max_output_tokens": 16,
+              })
+              print("status=", status)
+              data = load(body)
+              if isinstance(data, dict) and status < 400:
+                  text = data.get("output_text")
+                  if text is None:
+                      for item in data.get("output") or []:
+                          if isinstance(item, dict):
+                              for part in item.get("content") or []:
+                                  if isinstance(part, dict) and part.get("text"):
+                                      text = part["text"]
+                                      break
+                          if text: break
+                  print("object=", data.get("object"))
+                  print("model=", data.get("model"))
+                  print("status_field=", data.get("status"))
+                  print("output_text=", text)
+                  print("usage=", data.get("usage"))
+              else:
+                  show_error(data, body)
           PY
 
       - name: Publish sanitized probe result
@@ -133,13 +125,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if [ -f /tmp/ark_probe.txt ]; then
-            body="$(cat /tmp/ark_probe.txt)"
-          else
-            body="probe step failed before a report was produced"
-          fi
+          body="probe step failed before a report was produced"
+          [ ! -f /tmp/ark_probe.txt ] || body="$(cat /tmp/ark_probe.txt)"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "ark-coding-api-smoke:${GITHUB_RUN_ID}" \
+            --title "ark-plan-api-smoke:${GITHUB_RUN_ID}" \
             --body "\`\`\`text
           ${body}
           \`\`\`"
