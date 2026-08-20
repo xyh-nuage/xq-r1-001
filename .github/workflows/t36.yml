@@ -145,6 +145,7 @@ jobs:
           set -euo pipefail
           repo="$RUNNER_TEMP/context-bundle-ab-source/source"
           cd "$repo"
+          python -m pip install -q pytest
           python -m py_compile l1/tools/context_bundle_scorer.py l1/tools/run_research_context_bundle_ab.py
           python -m pytest -q l1/tests/test_context_bundle_scorer.py l1/tests/test_context_bundle_ab_manifest.py
 
@@ -191,7 +192,7 @@ jobs:
           repo="$RUNNER_TEMP/context-bundle-ab-source/source"
           out="$repo/l1/evaluation/vnext/runtime/research_context_bundle_ab_v1"
           python - "$out" <<'PY'
-          import hashlib, json, math, pathlib, sys
+          import json, pathlib, sys
           root = pathlib.Path(sys.argv[1])
           metrics = json.loads((root / "context_bundle_ab_metrics.v1.json").read_text(encoding="utf-8"))
           run = json.loads((root / "RUN.json").read_text(encoding="utf-8"))
