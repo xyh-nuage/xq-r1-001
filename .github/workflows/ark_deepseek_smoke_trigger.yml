@@ -17,4 +17,6 @@ jobs:
       - name: Dispatch smoke workflow
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run ark_deepseek_smoke.yml --repo "$GITHUB_REPOSITORY"
+        run: |
+          echo 'dispatch_version=2'
+          gh workflow run ark_deepseek_smoke.yml --repo "$GITHUB_REPOSITORY"
