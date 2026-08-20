@@ -1,4 +1,4 @@
-name: ark-online-mainstream-model-smoke
+name: ark-doubao-seed-text-smoke
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
   probe:
     environment: ark
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     env:
       ARK_API_KEY_DIRECT: ${{ secrets.ARK_API_KEY }}
       ARK_API_KEY_GENERIC: ${{ secrets.LLM_API_KEY }}
     steps:
-      - name: Probe mainstream Ark models from live catalog
+      - name: Probe current Doubao Seed text models
         shell: bash
         run: |
           set -euo pipefail
@@ -36,7 +36,7 @@ jobs:
               data = None if payload is None else json.dumps(payload).encode()
               r = urllib.request.Request(url, data=data, headers=headers, method=method)
               try:
-                  with urllib.request.urlopen(r, timeout=90) as resp:
+                  with urllib.request.urlopen(r, timeout=60) as resp:
                       return resp.status, resp.read().decode("utf-8", errors="replace")
               except urllib.error.HTTPError as e:
                   return e.code, e.read().decode("utf-8", errors="replace")
@@ -52,39 +52,33 @@ jobs:
           ids = []
           if isinstance(data, dict) and isinstance(data.get("data"), list):
               ids = [x.get("id") for x in data["data"] if isinstance(x, dict) and x.get("id")]
+
+          text_seed = []
+          for mid in ids:
+              low = mid.lower()
+              if not low.startswith("doubao-seed"):
+                  continue
+              if any(x in low for x in ("seedance", "seedream", "vision", "image", "video", "audio", "embedding")):
+                  continue
+              text_seed.append(mid)
           print("catalog_http=", status)
-          print("catalog_count=", len(ids))
+          print("doubao_seed_text_catalog=", text_seed)
 
-          families = [
-              ("doubao-seed", ["doubao-seed"]),
-              ("doubao-pro", ["doubao-1-5-pro", "doubao-pro"]),
-              ("kimi", ["kimi", "moonshot"]),
-              ("glm", ["glm"]),
-              ("qwen", ["qwen"]),
-              ("minimax", ["minimax"]),
-              ("seed-oss", ["seed-oss"]),
-              ("mistral", ["mistral"]),
+          preferred = [
+              "doubao-seed-2-0-lite-260215",
+              "doubao-seed-2-0-pro-260215",
+              "doubao-seed-1-8-251228",
+              "doubao-seed-1-6-250615",
+              "doubao-seed-1-6-lite-250828",
+              "doubao-seed-evolving",
           ]
-          blocked = ("embedding", "vision", "image", "video", "audio", "speech", "tts", "character", "browsing", "functioncall")
-          selected = []
-          family_map = {}
-          for family, pats in families:
-              hits = []
-              for mid in reversed(ids):
-                  low = mid.lower()
-                  if any(b in low for b in blocked):
-                      continue
-                  if any(p in low for p in pats):
-                      hits.append(mid)
-                  if len(hits) >= 3:
-                      break
-              family_map[family] = hits
-              for mid in hits:
-                  if mid not in selected:
-                      selected.append(mid)
-
-          print("catalog_mainstream_candidates=", json.dumps(family_map, ensure_ascii=False))
-          print("selected_count=", len(selected))
+          selected = [m for m in preferred if m in ids]
+          for mid in reversed(text_seed):
+              if mid not in selected:
+                  selected.append(mid)
+              if len(selected) >= 8:
+                  break
+          print("selected=", selected)
 
           chat_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
           usable = []
@@ -96,9 +90,9 @@ jobs:
                   "max_tokens": 32,
               })
               data = parse(body)
-              code = msg = returned_model = content = None
+              code = msg = content = returned = None
               if isinstance(data, dict):
-                  returned_model = data.get("model")
+                  returned = data.get("model")
                   err = data.get("error")
                   if isinstance(err, dict):
                       code = err.get("code")
@@ -112,16 +106,12 @@ jobs:
               if ok:
                   usable.append(model)
               print(json.dumps({
-                  "model": model,
-                  "http": status,
-                  "usable": ok,
-                  "returned_model": returned_model,
+                  "model": model, "http": status, "usable": ok,
+                  "returned_model": returned,
                   "content": content[:80] if isinstance(content, str) else content,
                   "error_code": code,
                   "error_message": msg[:220] if isinstance(msg, str) else msg,
               }, ensure_ascii=False))
-
-          print("=== RESULT ===")
           print("usable_models=", usable)
           print("usable_count=", len(usable))
           PY
@@ -136,7 +126,7 @@ jobs:
           body="probe step failed before a report was produced"
           [ ! -f /tmp/ark_probe.txt ] || body="$(cat /tmp/ark_probe.txt)"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "ark-mainstream-model-smoke:${GITHUB_RUN_ID}" \
+            --title "ark-doubao-seed-text-smoke:${GITHUB_RUN_ID}" \
             --body "\`\`\`text
           ${body}
           \`\`\`"
