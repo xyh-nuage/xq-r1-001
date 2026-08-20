@@ -1,0 +1,129 @@
+name: t82-company-upper-bound-slice-a-prep
+
+on:
+  push:
+    branches: [ci/company-upper-bound-slice-a-prep-001]
+    paths: ['.github/workflows/t82_company_upper_bound_slice_a_prep.yml']
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  prepare:
+    environment: deepseek
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Publish safe locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "t82-company-upper-bound-prep:${GITHUB_RUN_ID}" \
+            --body "Private deterministic Company Slice-A context preparation for exact knowledge source c1169ec9a1c7dece8f66e71d15f59fb9ec61cca0. No company message content is included here."
+
+      - name: Checkout public harness
+        uses: actions/checkout@v4
+
+      - name: Verify private result write access
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python scripts/private_results_preflight.py
+
+      - name: Checkout exact private Company source
+        uses: actions/checkout@v4
+        with:
+          repository: xyh-nuage/knowledge
+          ref: c1169ec9a1c7dece8f66e71d15f59fb9ec61cca0
+          token: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+          path: private-knowledge
+          fetch-depth: 1
+
+      - name: Compile and run focused tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install -q pytest
+          python -m py_compile \
+            private-knowledge/company/tools/validated_4948_projection.py \
+            private-knowledge/company/tools/build_company_matter_capability_slice_a.py \
+            private-knowledge/company/tools/run_company_matter_capability_slice_a.py
+          python -m pytest -q \
+            private-knowledge/company/tests/test_validated_4948_projection.py \
+            private-knowledge/company/tests/test_company_matter_capability_slice_a.py
+
+      - name: Build exact cross-group chronological context
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="private-knowledge/company/evaluation/matter_capability_upper_bound_slice_a/prepared"
+          rm -rf "$out"
+          python private-knowledge/company/tools/build_company_matter_capability_slice_a.py \
+            --db private-knowledge/l0_state.db \
+            --output-dir "$out" \
+            --source-sha c1169ec9a1c7dece8f66e71d15f59fb9ec61cca0 >/dev/null
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('private-knowledge/company/evaluation/matter_capability_upper_bound_slice_a/prepared/manifest.json')
+          m=json.loads(p.read_text(encoding='utf-8'))
+          safe={
+            'source_sha':m['source_sha'],
+            'source_db_sha256':m['source_db_sha256'],
+            'target_messages':m['target']['message_count'],
+            'interval_start':m['target']['interval_start'],
+            'interval_end':m['target']['interval_end'],
+            'context_messages':m['context']['message_count'],
+            'context_groups':m['context']['group_count'],
+            'attachments':m['context']['attachment_count'],
+            'attachment_previews':m['context']['attachment_preview_count'],
+            'cross_group_relations':m['context']['cross_group_structured_relation_count'],
+            'duplicate_attachment_links':m['context']['duplicate_attachment_link_count'],
+            'validated_projection_source_sha':m['context']['validated_projection_source_sha'],
+            'validated_projection_model_message_count':m['context']['validated_projection_model_message_count'],
+            'timeline_sha256':m['files']['all_groups_timeline.model.txt']['sha256'],
+            'private_timeline_sha256':m['files']['all_groups_timeline.private.jsonl']['sha256'],
+          }
+          print('COMPANY_UPPER_BOUND_PREP_SAFE='+json.dumps(safe, sort_keys=True))
+          (p.parent/'safe_validation.json').write_text(json.dumps(safe, ensure_ascii=False, indent=2)+'\n', encoding='utf-8')
+          PY
+
+      - name: Persist private prepared bundle
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="private-knowledge"
+          base="company/evaluation/matter_capability_upper_bound_slice_a/prepared"
+          eval_date="$(date -u +%F)"
+          python scripts/private_results_publisher.py \
+            --source-root "$repo" \
+            --source-sha c1169ec9a1c7dece8f66e71d15f59fb9ec61cca0 \
+            --harness-sha "${{ github.sha }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$eval_date" \
+            --evaluation company_matter_capability_upper_bound_slice_a_prep \
+            --copy "$base/manifest.json=manifest.json" \
+            --copy "$base/safe_validation.json=safe_validation.json" \
+            --copy "$base/all_groups_timeline.model.txt=all_groups_timeline.model.txt" \
+            --copy "$base/all_groups_timeline.private.jsonl=all_groups_timeline.private.jsonl" \
+            --copy "$base/business_background.model.md=business_background.model.md"
+
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'COMPANY_MATTER_CAPABILITY_UPPER_BOUND_SLICE_A_PREP_PASS'
+          echo 'model_calls=0'
+          echo 'target_messages=83'
+          echo 'gold_model_input=0'
+          echo 'research_shared_frozen_code_changed=0'
+          echo 'merge_performed=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf private-knowledge "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
