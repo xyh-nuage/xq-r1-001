@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 env:
   ARK_ENDPOINT: https://ark.cn-beijing.volces.com/api/v3/responses
@@ -19,24 +20,31 @@ jobs:
     environment: ark
     timeout-minutes: 5
     steps:
-      - name: Call Ark DeepSeek once
+      - name: Call Ark DeepSeek once and publish safe result
         shell: bash
         env:
           ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
           FALLBACK_API_KEY: ${{ secrets.LLM_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
+          set -u
           key="${ARK_API_KEY:-${FALLBACK_API_KEY:-}}"
-          test -n "$key" || { echo 'ark_api_key=MISSING'; exit 2; }
-
+          summary_file="$(mktemp)"
           body_file="$(mktemp)"
-          http_code="$(curl -sS -o "$body_file" -w '%{http_code}' \
-            "$ARK_ENDPOINT" \
-            -H "Authorization: Bearer $key" \
-            -H 'Content-Type: application/json' \
-            -d "{\"model\":\"$ARK_MODEL\",\"input\":\"hello\"}")"
+          rc=0
 
-          python - "$http_code" "$body_file" <<'PY'
+          if [ -z "$key" ]; then
+            printf '%s\n' 'ark_api_key=MISSING' > "$summary_file"
+            rc=2
+          else
+            http_code="$(curl -sS -o "$body_file" -w '%{http_code}' \
+              "$ARK_ENDPOINT" \
+              -H "Authorization: Bearer $key" \
+              -H 'Content-Type: application/json' \
+              -d "{\"model\":\"$ARK_MODEL\",\"input\":\"hello\"}")" || rc=$?
+
+            if [ "$rc" -eq 0 ]; then
+              python - "$http_code" "$body_file" > "$summary_file" <<'PY' || rc=$?
 import json, sys
 code = sys.argv[1]
 path = sys.argv[2]
@@ -65,5 +73,12 @@ for item in obj.get('output', []) or []:
             texts.append(part['text'])
 print('output_text=' + (' '.join(texts)[:500] if texts else '<none>'))
 PY
+            fi
+          fi
 
-          rm -f "$body_file"
+          cat "$summary_file"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "ark-deepseek-smoke:${GITHUB_RUN_ID}" \
+            --body "$(cat "$summary_file")"
+          rm -f "$summary_file" "$body_file"
+          exit "$rc"
