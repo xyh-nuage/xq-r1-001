@@ -10,12 +10,11 @@ permissions:
   issues: write
 
 jobs:
-  run:
+  locator:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.display_title, 'rq:t35:')
     runs-on: ubuntu-latest
-    environment: ark
     timeout-minutes: 5
     steps:
       - name: Publish safe run locator
@@ -23,6 +22,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh issue create --repo "$GITHUB_REPOSITORY" --title "t35-ark-deepseek-run:${GITHUB_RUN_ID}" --body "Ark DeepSeek smoke locator. No secret or business payload."
 
+  probe:
+    needs: locator
+    runs-on: ubuntu-latest
+    environment: ark
+    timeout-minutes: 5
+    steps:
       - name: Probe Ark DeepSeek Responses API
         shell: bash
         env:
