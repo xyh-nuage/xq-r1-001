@@ -1,0 +1,278 @@
+name: t36
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: exact private Context Bundle A/B source commit
+        required: true
+        type: string
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: remote-t36-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t36:'))
+    environment: shangtang
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh issue create --repo "${{ github.repository }}" --title "t36-context-bundle-ab-run:${{ github.run_id }}" --body "Safe run locator for Seen-only fixed-window Context Bundle A/B. Historical Matter baseline is reused. No company content."
+
+      - name: Resolve source and harness SHAs
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            source="${REQUEST_TITLE#rq:t36:}"
+            harness="$REQUEST_HARNESS_SHA"
+          else
+            source="$DISPATCH_SHA"
+            harness="$CURRENT_HARNESS_SHA"
+          fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || { echo 'source_sha=INVALID'; exit 2; }
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || { echo 'harness_sha=INVALID'; exit 2; }
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Verify private result write access before model calls
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
+
+      - name: Prepare exact private source and immutable A/B inputs
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/context-bundle-ab-source"
+          repo="$root/source"
+          input="$root/input"
+          mkdir -p "$root" "$input/packets" "$input/baseline"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t36-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass"
+          export GIT_TERMINAL_PROMPT=0
+
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+
+          packet_commit="01285f526db49ae4d51bdfb351632bc048884ad5"
+          packet_prefix="evaluation_results/research_matter_phase0_candidates/2026-08-19_cec83f7c_run32268255221/candidate_packets"
+          git -C "$repo" fetch -q --depth=1 origin "$packet_commit"
+          git -C "$repo" show "$packet_commit:$packet_prefix/2026-07-08_8e2cfc446694.txt" > "$input/packets/jiekun.txt"
+          git -C "$repo" show "$packet_commit:$packet_prefix/2026-07-16_84f34dbd5f23.txt" > "$input/packets/zhongtai.txt"
+          test "$(git hash-object "$input/packets/jiekun.txt")" = "c40af9f54936a4da9c1b9e3bda4678c770317486"
+          test "$(git hash-object "$input/packets/zhongtai.txt")" = "99c5cb5587608cc140070b1482b2442746081252"
+
+          materialize_baseline() {
+            run_id="$1"
+            result_commit="$2"
+            result_path="$3"
+            dest="$input/baseline/$run_id"
+            mkdir -p "$dest"
+            git -C "$repo" fetch -q --depth=1 origin "$result_commit"
+            git -C "$repo" show "$result_commit:$result_path/raw/two_stage_on_medium_case1_stage1.json" > "$dest/two_stage_on_medium_case1_stage1.json"
+            git -C "$repo" show "$result_commit:$result_path/raw/two_stage_on_medium_case2_stage1.json" > "$dest/two_stage_on_medium_case2_stage1.json"
+          }
+
+          materialize_baseline 32335002677 a90ac61e5736181eaf4651a3c4af19a78d87ee5e evaluation_results/research_matter_two_stage_identity/2026-08-20_dd7f4a01_run32335002677
+          materialize_baseline 32346182700 e6a90cbec24697b728eef9bac4a0690a3da8ef7b evaluation_results/research_matter_two_stage_identity/2026-08-20_dd7f4a01_run32346182700
+          materialize_baseline 32354599240 eb0c88160054bb51e1441f7ea226dc03a081d095 evaluation_results/research_matter_two_stage_identity/2026-08-20_dd7f4a01_run32354599240
+          materialize_baseline 32356523216 485664223fe72365147517098936186105de3ef9 evaluation_results/research_matter_two_stage_identity/2026-08-20_dd7f4a01_run32356523216
+          materialize_baseline 32363389031 3d26e3a21130d86be950d9ecc1621147ab3e4c64 evaluation_results/research_matter_two_stage_identity/2026-08-20_dd7f4a01_run32363389031
+
+          test "$(find "$input/baseline" -type f -name 'two_stage_on_medium_case*_stage1.json' | wc -l)" -eq 10
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'private_source=VERIFIED_EXACT_SHA'
+          echo 'historical_baseline_raw_files=10'
+          echo 'packet_inputs=VERIFIED_IMMUTABLE'
+
+      - name: Validate scorer and frozen experiment contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-bundle-ab-source/source"
+          cd "$repo"
+          python -m py_compile l1/tools/context_bundle_scorer.py l1/tools/run_research_context_bundle_ab.py
+          python -m pytest -q l1/tests/test_context_bundle_scorer.py l1/tests/test_context_bundle_ab_manifest.py
+
+      - name: Verify Shangtang model configuration
+        shell: bash
+        env:
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          test -n "$L1_LLM_API_KEY" || { echo 'LLM_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
+          test -n "$L1_LLM_BASE_URL" || { echo 'LLM_BASE_URL=MISSING_NO_MODEL_CALL'; exit 2; }
+          test "$L1_LLM_MODEL" = 'deepseek-v4-flash' || { echo 'LLM_MODEL=UNEXPECTED_NO_MODEL_CALL'; exit 2; }
+          echo 'shangtang_environment=CONFIG_PRESENT'
+
+      - name: Run Context Bundle fixed-window 5x comparison
+        shell: bash
+        env:
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          L1_LLM_TIMEOUT_SECONDS: '300'
+          L1_LLM_MAX_RETRIES: '3'
+          L1_LLM_RETRY_BACKOFF_SECONDS: '60'
+          RESEARCH_MATTER_V2_MAX_TOKENS: '25000'
+          L1_LLM_MAX_COMPLETION_FIELD: 'max_tokens'
+          L1_LLM_DISABLE_REASONING: 'false'
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-bundle-ab-source/source"
+          input="$RUNNER_TEMP/context-bundle-ab-source/input"
+          out="$repo/l1/evaluation/vnext/runtime/research_context_bundle_ab_v1"
+          rm -rf "$out"
+          python "$repo/l1/tools/run_research_context_bundle_ab.py" \
+            --output-dir "$out" \
+            --input-dir "$input" \
+            --source-sha "${{ steps.source.outputs.value }}"
+
+      - name: Publish safe aggregate audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-bundle-ab-source/source"
+          out="$repo/l1/evaluation/vnext/runtime/research_context_bundle_ab_v1"
+          python - "$out" <<'PY'
+          import hashlib, json, math, pathlib, sys
+          root = pathlib.Path(sys.argv[1])
+          metrics = json.loads((root / "context_bundle_ab_metrics.v1.json").read_text(encoding="utf-8"))
+          run = json.loads((root / "RUN.json").read_text(encoding="utf-8"))
+          safe = {
+              "baseline_rerun": int(bool(metrics["baseline_rerun"])),
+              "new_semantic_successes": int(metrics["new_semantic_successes"]),
+              "actual_new_model_calls": int(metrics["actual_new_model_calls"]),
+              "provider_runtime_failures": len(metrics["execution_failures"]),
+              "A_prompt_sha256": run["A_prompt_sha256"],
+              "B_prompt_sha256": run["B_prompt_sha256"],
+              "silver_sha256": run["silver_sha256"],
+              "manifest_sha256": run["manifest_sha256"],
+              "samples": {},
+          }
+          for sample_id, sample in metrics["samples"].items():
+              row = {"window": sample["window"], "conditions": {}}
+              for cond in ("A", "B"):
+                  agg = sample[cond]["aggregate"]
+                  row["conditions"][cond] = {
+                      "dependency_recall_mean": agg["dependency_recall"]["mean"],
+                      "dependency_recall_min": agg["dependency_recall"]["min"],
+                      "dependency_recall_max": agg["dependency_recall"]["max"],
+                      "clean_trap_rate_mean": agg["clean_trap_rate"]["mean"],
+                      "forced_attachment_mean": agg["forced_attachment_count"]["mean"],
+                      "harmful_fragmentation_mean": agg["automatic_harmful_fragmentation_count"]["mean"],
+                      "diagnostic_pairwise_f1_mean": agg["diagnostic_pairwise_f1"]["mean"],
+                      "coverage_rate_mean": agg["coverage_rate"]["mean"],
+                      "valid_output_count": int(agg["valid_output_count"]),
+                      "stability_majority_agreement": sample[cond]["stability"]["mean_majority_agreement"],
+                  }
+              safe["samples"][sample_id] = row
+          print("CONTEXT_BUNDLE_AB_AUDIT=" + json.dumps(safe, sort_keys=True, separators=(",", ":")))
+          PY
+
+      - name: Persist detailed private A/B result
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-bundle-ab-source/source"
+          base="l1/evaluation/vnext/runtime/research_context_bundle_ab_v1"
+          copies=(
+            --copy "$base/RUN.json=RUN.json"
+            --copy "$base/context_bundle_ab_metrics.v1.json=context_bundle_ab_metrics.v1.json"
+            --copy "$base/RESULTS_CONTEXT_BUNDLE_AB_V1.md=RESULTS_CONTEXT_BUNDLE_AB_V1.md"
+            --copy "l1/evaluation/research_matter_three_validation/context_bundle_ab_manifest.v1.json=context_bundle_ab_manifest.v1.json"
+            --copy "l1/evaluation/research_matter_three_validation/matter_v2_prompt_contract.v1.txt=matter_v2_prompt_contract.v1.txt"
+            --copy "l1/evaluation/research_matter_three_validation/context_bundle_prompt_contract.v1.txt=context_bundle_prompt_contract.v1.txt"
+            --copy "l1/evaluation/research_matter_three_validation/seen_context_bundle_silver.v1.readjudicated.json=seen_context_bundle_silver.v1.readjudicated.json"
+          )
+          shopt -s nullglob
+          raw_files=("$repo/$base/raw/"*/*.json)
+          for file in "${raw_files[@]}"; do
+            rel="${file#$repo/$base/}"
+            copies+=(--copy "$base/$rel=$rel")
+          done
+          date_utc="$(date -u +%F)"
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$repo" \
+            --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$date_utc" \
+            --evaluation research_context_bundle_ab_v1 \
+            "${copies[@]}"
+
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'RESEARCH_CONTEXT_BUNDLE_AB_V1_REMOTE_PASS'
+          echo 'historical_matter_baseline_rerun=0'
+          echo 'new_context_bundle_success_target=10'
+          echo 'sealed_unseen_used=0'
+          echo 'continuity_used=0'
+          echo 'previous_matter_cards_used=0'
+          echo 'cross_group_used=0'
+          echo 'merge_performed=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/context-bundle-ab-source" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/t36-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/private-results-askpass.sh" "$RUNNER_TEMP/private-results-preflight-askpass.sh"
