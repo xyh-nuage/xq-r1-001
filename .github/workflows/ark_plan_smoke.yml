@@ -1,0 +1,102 @@
+name: ark-plan-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ark_plan_smoke.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: ark
+    timeout-minutes: 5
+    env:
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+    steps:
+      - name: Probe Agent Plan chat completions
+        id: probe
+        shell: bash
+        run: |
+          python - <<'PY' | tee /tmp/ark_plan_smoke.txt
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          key = (os.getenv('LLM_API_KEY') or '').strip()
+          if key.lower().startswith('bearer '):
+              key = key[7:].strip()
+
+          endpoint = 'https://ark.cn-beijing.volces.com/api/plan/v3/chat/completions'
+          model = 'deepseek-v4-flash'
+          print('api_key_present=' + str(bool(key)).lower())
+          print('endpoint=/api/plan/v3/chat/completions')
+          print('model=' + model)
+          print('query=Reply exactly: OK')
+
+          if not key:
+              print('ARK_PLAN_SMOKE=CONFIG_MISSING')
+              sys.exit(2)
+
+          payload = {
+              'model': model,
+              'messages': [{'role': 'user', 'content': 'Reply exactly: OK'}],
+              'max_tokens': 16,
+              'stream': False,
+          }
+          req = urllib.request.Request(
+              endpoint,
+              data=json.dumps(payload).encode('utf-8'),
+              method='POST',
+              headers={
+                  'Authorization': 'Bearer ' + key,
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json',
+              },
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  raw = resp.read().decode('utf-8', 'replace')
+                  obj = json.loads(raw)
+                  choice = (obj.get('choices') or [{}])[0]
+                  msg = choice.get('message') or {}
+                  content = msg.get('content') or ''
+                  usage = obj.get('usage') or {}
+                  print('http_status=' + str(resp.status))
+                  print('response_object=' + str(obj.get('object')))
+                  print('response_model=' + str(obj.get('model')))
+                  print('finish_reason=' + str(choice.get('finish_reason')))
+                  print('output=' + repr(content[:120]))
+                  print('prompt_tokens=' + str(usage.get('prompt_tokens')))
+                  print('completion_tokens=' + str(usage.get('completion_tokens')))
+                  print('ARK_PLAN_SMOKE=PASS')
+          except urllib.error.HTTPError as e:
+              body = e.read().decode('utf-8', 'replace')[:1200].replace('\n', ' ')
+              print('http_status=' + str(e.code))
+              print('http_error=' + repr(body))
+              print('ARK_PLAN_SMOKE=HTTP_FAIL')
+              sys.exit(3)
+          except Exception as e:
+              print('transport_error=' + type(e).__name__ + ':' + str(e))
+              print('ARK_PLAN_SMOKE=TRANSPORT_FAIL')
+              sys.exit(4)
+          PY
+
+      - name: Publish sanitized result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          body="$(cat /tmp/ark_plan_smoke.txt 2>/dev/null || printf '%s\n' 'no probe output')"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "ark-plan-v4-flash-smoke:${GITHUB_RUN_ID}" \
+            --body "\`\`\`text
+          $body
+          \`\`\`"
