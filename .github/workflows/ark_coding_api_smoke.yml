@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   probe:
@@ -23,7 +24,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          python - <<'PY' | tee /tmp/ark_probe.txt
           import json
           import os
           import urllib.error
@@ -35,108 +36,110 @@ jobs:
 
           coding_base = "https://ark.cn-beijing.volces.com/api/coding/v3"
           online_base = "https://ark.cn-beijing.volces.com/api/v3"
-          headers = {
-              "Authorization": f"Bearer {key}",
-              "Content-Type": "application/json",
-          }
+          headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
           def request(method, url, payload=None):
-              data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+              data = None if payload is None else json.dumps(payload).encode()
               req = urllib.request.Request(url, data=data, headers=headers, method=method)
               try:
                   with urllib.request.urlopen(req, timeout=45) as r:
-                      body = r.read().decode("utf-8", errors="replace")
-                      return r.status, body
+                      return r.status, r.read().decode("utf-8", errors="replace")
               except urllib.error.HTTPError as e:
-                  body = e.read().decode("utf-8", errors="replace")
-                  return e.code, body
+                  return e.code, e.read().decode("utf-8", errors="replace")
               except Exception as e:
                   return -1, f"{type(e).__name__}: {e}"
 
-          def parse_json(body):
+          def obj(body):
               try:
                   return json.loads(body)
               except Exception:
                   return None
 
-          print("=== 1) Coding Plan GET /models ===")
+          print("=== coding GET /models ===")
           status, body = request("GET", coding_base + "/models")
           print("status=", status)
-          obj = parse_json(body)
-          if isinstance(obj, dict) and isinstance(obj.get("data"), list):
-              ids = [x.get("id") for x in obj["data"] if isinstance(x, dict) and x.get("id")]
-              print("model_ids=", ids[:50])
+          data = obj(body)
+          if isinstance(data, dict) and isinstance(data.get("data"), list):
+              print("model_ids=", [x.get("id") for x in data["data"] if isinstance(x, dict) and x.get("id")][:50])
           else:
               print("body_preview=", body[:600].replace(key, "***"))
 
-          print("=== 2) Online inference GET /models (discovery only, no generation) ===")
+          print("=== online GET /models (discovery only) ===")
           status, body = request("GET", online_base + "/models")
           print("status=", status)
-          obj = parse_json(body)
-          if isinstance(obj, dict) and isinstance(obj.get("data"), list):
-              ids = [x.get("id") for x in obj["data"] if isinstance(x, dict) and x.get("id")]
-              ds = [x for x in ids if "deepseek" in x.lower()]
-              print("deepseek_model_ids=", ds[:50])
+          data = obj(body)
+          if isinstance(data, dict) and isinstance(data.get("data"), list):
+              ids = [x.get("id") for x in data["data"] if isinstance(x, dict) and x.get("id")]
+              print("deepseek_model_ids=", [x for x in ids if "deepseek" in x.lower()][:50])
           else:
               print("body_preview=", body[:600].replace(key, "***"))
 
-          print("=== 3) Coding Plan POST /chat/completions, model=deepseek-v3.2 ===")
-          chat_payload = {
+          print("=== coding POST /chat/completions model=deepseek-v3.2 ===")
+          status, body = request("POST", coding_base + "/chat/completions", {
               "model": "deepseek-v3.2",
               "messages": [{"role": "user", "content": "Reply exactly PONG."}],
               "stream": False,
               "max_tokens": 16,
-          }
-          status, body = request("POST", coding_base + "/chat/completions", chat_payload)
+          })
           print("status=", status)
-          obj = parse_json(body)
-          if isinstance(obj, dict):
-              print("object=", obj.get("object"))
-              print("model=", obj.get("model"))
-              choices = obj.get("choices") or []
-              content = None
-              finish = None
-              if choices and isinstance(choices[0], dict):
-                  msg = choices[0].get("message") or {}
-                  if isinstance(msg, dict):
-                      content = msg.get("content")
-                  finish = choices[0].get("finish_reason")
-              print("content=", content)
-              print("finish_reason=", finish)
-              print("usage=", obj.get("usage"))
+          data = obj(body)
+          if isinstance(data, dict):
+              choices = data.get("choices") or []
+              msg = choices[0].get("message") if choices and isinstance(choices[0], dict) else {}
+              print("object=", data.get("object"))
+              print("model=", data.get("model"))
+              print("content=", msg.get("content") if isinstance(msg, dict) else None)
+              print("finish_reason=", choices[0].get("finish_reason") if choices else None)
+              print("usage=", data.get("usage"))
               if status >= 400:
-                  print("error=", obj.get("error"))
+                  print("error=", data.get("error"))
           else:
               print("body_preview=", body[:1000].replace(key, "***"))
 
-          print("=== 4) Coding Plan POST /responses, model=deepseek-v3.2 ===")
-          responses_payload = {
+          print("=== coding POST /responses model=deepseek-v3.2 ===")
+          status, body = request("POST", coding_base + "/responses", {
               "model": "deepseek-v3.2",
               "input": "Reply exactly PONG.",
               "max_output_tokens": 16,
-          }
-          status, body = request("POST", coding_base + "/responses", responses_payload)
+          })
           print("status=", status)
-          obj = parse_json(body)
-          if isinstance(obj, dict):
-              print("object=", obj.get("object"))
-              print("model=", obj.get("model"))
-              print("status_field=", obj.get("status"))
-              text = obj.get("output_text")
+          data = obj(body)
+          if isinstance(data, dict):
+              text = data.get("output_text")
               if text is None:
-                  for item in obj.get("output") or []:
-                      if not isinstance(item, dict):
-                          continue
-                      for part in item.get("content") or []:
-                          if isinstance(part, dict) and part.get("text"):
-                              text = part.get("text")
-                              break
+                  for item in data.get("output") or []:
+                      if isinstance(item, dict):
+                          for part in item.get("content") or []:
+                              if isinstance(part, dict) and part.get("text"):
+                                  text = part["text"]
+                                  break
                       if text:
                           break
+              print("object=", data.get("object"))
+              print("model=", data.get("model"))
+              print("status_field=", data.get("status"))
               print("output_text=", text)
-              print("usage=", obj.get("usage"))
+              print("usage=", data.get("usage"))
               if status >= 400:
-                  print("error=", obj.get("error"))
+                  print("error=", data.get("error"))
           else:
               print("body_preview=", body[:1000].replace(key, "***"))
           PY
+
+      - name: Publish sanitized probe result
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ -f /tmp/ark_probe.txt ]; then
+            body="$(cat /tmp/ark_probe.txt)"
+          else
+            body="probe step failed before a report was produced"
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "ark-coding-api-smoke:${GITHUB_RUN_ID}" \
+            --body "\`\`\`text
+          ${body}
+          \`\`\`"
