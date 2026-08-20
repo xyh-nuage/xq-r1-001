@@ -1,0 +1,117 @@
+name: ark-header-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ark_header_smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: ark
+    timeout-minutes: 10
+    env:
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+      ARK_BASE_URL: ${{ secrets.ARK_BASE_URL }}
+      ARK_MODEL: ${{ secrets.ARK_MODEL }}
+    steps:
+      - name: Probe Ark header compatibility
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          key = os.getenv('LLM_API_KEY') or os.getenv('ARK_API_KEY') or ''
+          base = os.getenv('LLM_BASE_URL') or os.getenv('ARK_BASE_URL') or 'https://ark.cn-beijing.volces.com/api/v3'
+          model = os.getenv('LLM_MODEL') or os.getenv('ARK_MODEL') or ''
+
+          print('config.key_present=' + str(bool(key)).lower())
+          print('config.model_present=' + str(bool(model)).lower())
+          print('config.base_source=' + ('secret' if (os.getenv('LLM_BASE_URL') or os.getenv('ARK_BASE_URL')) else 'official_default'))
+          print('config.host=' + (urllib.parse.urlparse(base).hostname or 'invalid'))
+
+          if not key or not model:
+              print('ARK_SMOKE=CONFIG_MISSING')
+              sys.exit(2)
+
+          base = base.rstrip('/')
+          if base.endswith('/chat/completions'):
+              endpoint = base
+          else:
+              endpoint = base + '/chat/completions'
+
+          payload = json.dumps({
+              'model': model,
+              'messages': [{'role': 'user', 'content': 'Reply with exactly: pong'}],
+              'max_tokens': 16,
+              'stream': False,
+          }, ensure_ascii=False).encode('utf-8')
+
+          cases = [
+              ('canonical_bearer_json', {
+                  'Authorization': f'Bearer {key}',
+                  'Content-Type': 'application/json',
+              }),
+              ('canonical_plus_accept', {
+                  'Authorization': f'Bearer {key}',
+                  'Content-Type': 'application/json',
+                  'Accept': 'application/json',
+              }),
+              ('bearer_without_content_type', {
+                  'Authorization': f'Bearer {key}',
+              }),
+              ('raw_authorization_json', {
+                  'Authorization': key,
+                  'Content-Type': 'application/json',
+              }),
+              ('x_api_key_json', {
+                  'X-API-Key': key,
+                  'Content-Type': 'application/json',
+              }),
+              ('no_auth_json', {
+                  'Content-Type': 'application/json',
+              }),
+          ]
+
+          success = 0
+          for name, headers in cases:
+              req = urllib.request.Request(endpoint, data=payload, method='POST', headers=headers)
+              try:
+                  with urllib.request.urlopen(req, timeout=45) as resp:
+                      raw = resp.read().decode('utf-8', 'replace')
+                      status = resp.status
+                      ctype = resp.headers.get('Content-Type', '')
+                      reply = ''
+                      try:
+                          obj = json.loads(raw)
+                          reply = (((obj.get('choices') or [{}])[0].get('message') or {}).get('content') or '')
+                      except Exception:
+                          pass
+                      print(f'case={name} status={status} response_content_type={ctype!r} reply={reply[:80]!r}')
+                      if 200 <= status < 300:
+                          success += 1
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode('utf-8', 'replace')[:500].replace('\n', ' ')
+                  print(f'case={name} status={e.code} http_error={body!r}')
+              except Exception as e:
+                  print(f'case={name} transport_error={type(e).__name__}:{e}')
+
+          print(f'cases_2xx={success}/{len(cases)}')
+          if success:
+              print('ARK_SMOKE=AT_LEAST_ONE_HEADER_SET_WORKS')
+              sys.exit(0)
+          print('ARK_SMOKE=NO_HEADER_SET_WORKS')
+          sys.exit(3)
+          PY
