@@ -1,4 +1,4 @@
-name: ark-online-deepseek-availability-smoke
+name: ark-online-mainstream-model-smoke
 
 on:
   push:
@@ -15,12 +15,12 @@ jobs:
   probe:
     environment: ark
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       ARK_API_KEY_DIRECT: ${{ secrets.ARK_API_KEY }}
       ARK_API_KEY_GENERIC: ${{ secrets.LLM_API_KEY }}
     steps:
-      - name: Probe activated-list and mainstream DeepSeek models
+      - name: Probe mainstream Ark models from live catalog
         shell: bash
         run: |
           set -euo pipefail
@@ -30,11 +30,11 @@ jobs:
           key = os.environ.get("ARK_API_KEY_DIRECT") or os.environ.get("ARK_API_KEY_GENERIC")
           if not key:
               raise SystemExit("ARK_KEY=MISSING")
+          headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
 
-          def req(method, url, payload=None, headers=None):
+          def req(method, url, payload=None):
               data = None if payload is None else json.dumps(payload).encode()
-              h = headers or {}
-              r = urllib.request.Request(url, data=data, headers=h, method=method)
+              r = urllib.request.Request(url, data=data, headers=headers, method=method)
               try:
                   with urllib.request.urlopen(r, timeout=90) as resp:
                       return resp.status, resp.read().decode("utf-8", errors="replace")
@@ -47,57 +47,56 @@ jobs:
               try: return json.loads(body)
               except Exception: return None
 
-          print("=== A) Try management ListModelActivations with this Bearer key ===")
-          mgmt_url = "https://ark.cn-beijing.volcengineapi.com/?Action=ListModelActivations&Version=2024-01-01"
-          status, body = req(
-              "POST", mgmt_url,
-              {"PageNumber": 1, "PageSize": 100, "Filter": {"States": ["Available"]}},
-              {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-          )
-          print("status=", status)
+          status, body = req("GET", "https://ark.cn-beijing.volces.com/api/v3/models")
           data = parse(body)
-          if isinstance(data, dict):
-              result = data.get("Result") or {}
-              items = result.get("Items") if isinstance(result, dict) else None
-              if isinstance(items, list):
-                  print("activated_models=", [x.get("FoundationModelName") for x in items if isinstance(x, dict)])
-              else:
-                  meta = data.get("ResponseMetadata") or {}
-                  err = meta.get("Error") if isinstance(meta, dict) else None
-                  print("management_error=", err or data.get("error") or str(data)[:700])
-          else:
-              print("body_preview=", body[:700].replace(key, "***"))
+          ids = []
+          if isinstance(data, dict) and isinstance(data.get("data"), list):
+              ids = [x.get("id") for x in data["data"] if isinstance(x, dict) and x.get("id")]
+          print("catalog_http=", status)
+          print("catalog_count=", len(ids))
 
-          print("=== B) Ordinary /api/v3/chat/completions DeepSeek matrix ===")
-          models = [
-              "deepseek-v4-pro-ga-260813",
-              "deepseek-v4-flash-ga-260731",
-              "deepseek-v4-pro-260425",
-              "deepseek-v4-flash-260425",
-              "deepseek-v4-pro",
-              "deepseek-v4-flash",
-              "deepseek-v3-2-251201",
-              "deepseek-v3-1-terminus",
-              "deepseek-v3-1-250821",
-              "deepseek-r1-250528",
-              "deepseek-v3-250324",
-              "deepseek-r1-250120",
+          families = [
+              ("doubao-seed", ["doubao-seed"]),
+              ("doubao-pro", ["doubao-1-5-pro", "doubao-pro"]),
+              ("kimi", ["kimi", "moonshot"]),
+              ("glm", ["glm"]),
+              ("qwen", ["qwen"]),
+              ("minimax", ["minimax"]),
+              ("seed-oss", ["seed-oss"]),
+              ("mistral", ["mistral"]),
           ]
-          base = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
-          headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+          blocked = ("embedding", "vision", "image", "video", "audio", "speech", "tts", "character", "browsing", "functioncall")
+          selected = []
+          family_map = {}
+          for family, pats in families:
+              hits = []
+              for mid in reversed(ids):
+                  low = mid.lower()
+                  if any(b in low for b in blocked):
+                      continue
+                  if any(p in low for p in pats):
+                      hits.append(mid)
+                  if len(hits) >= 3:
+                      break
+              family_map[family] = hits
+              for mid in hits:
+                  if mid not in selected:
+                      selected.append(mid)
+
+          print("catalog_mainstream_candidates=", json.dumps(family_map, ensure_ascii=False))
+          print("selected_count=", len(selected))
+
+          chat_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
           usable = []
-          for model in models:
-              status, body = req("POST", base, {
+          for model in selected:
+              status, body = req("POST", chat_url, {
                   "model": model,
                   "messages": [{"role": "user", "content": "Reply exactly OK."}],
                   "stream": False,
                   "max_tokens": 32,
-              }, headers)
+              })
               data = parse(body)
-              code = None
-              msg = None
-              returned_model = None
-              content = None
+              code = msg = returned_model = content = None
               if isinstance(data, dict):
                   returned_model = data.get("model")
                   err = data.get("error")
@@ -119,7 +118,7 @@ jobs:
                   "returned_model": returned_model,
                   "content": content[:80] if isinstance(content, str) else content,
                   "error_code": code,
-                  "error_message": msg[:240] if isinstance(msg, str) else msg,
+                  "error_message": msg[:220] if isinstance(msg, str) else msg,
               }, ensure_ascii=False))
 
           print("=== RESULT ===")
@@ -137,7 +136,7 @@ jobs:
           body="probe step failed before a report was produced"
           [ ! -f /tmp/ark_probe.txt ] || body="$(cat /tmp/ark_probe.txt)"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "ark-deepseek-availability-smoke:${GITHUB_RUN_ID}" \
+            --title "ark-mainstream-model-smoke:${GITHUB_RUN_ID}" \
             --body "\`\`\`text
           ${body}
           \`\`\`"
