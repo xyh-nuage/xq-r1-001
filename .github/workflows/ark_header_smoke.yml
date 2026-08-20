@@ -17,69 +17,68 @@ jobs:
     timeout-minutes: 10
     env:
       LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-      ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+      LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
     steps:
-      - name: Probe Ark DeepSeek Responses API
+      - name: Probe Ark DeepSeek plan combinations
         continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
           python - <<'PY' | tee /tmp/ark_smoke.txt
-          import json
-          import os
-          import sys
-          import urllib.error
-          import urllib.request
+          import json, os, sys, urllib.error, urllib.request
 
-          raw_key = os.getenv('LLM_API_KEY') or os.getenv('ARK_API_KEY') or ''
-          key = raw_key.strip()
-          if key.lower().startswith('bearer '):
-              key = key[7:].strip()
-
-          endpoint = 'https://ark.cn-beijing.volces.com/api/v3/responses'
-          model = 'deepseek-v3-2-251201'
-          print('config.llm_api_key_present=' + str(bool(os.getenv('LLM_API_KEY'))).lower())
-          print('config.ark_api_key_present=' + str(bool(os.getenv('ARK_API_KEY'))).lower())
-          print('endpoint=/api/v3/responses')
-          print('requested_model=' + model)
-
+          key = (os.getenv('LLM_API_KEY') or '').strip()
+          if key.lower().startswith('bearer '): key = key[7:].strip()
+          configured_base = (os.getenv('LLM_BASE_URL') or '').rstrip('/')
+          configured_model = os.getenv('LLM_MODEL') or ''
+          print('config.llm_api_key_present=' + str(bool(key)).lower())
+          print('config.llm_base_url_present=' + str(bool(configured_base)).lower())
+          print('config.llm_model_present=' + str(bool(configured_model)).lower())
           if not key:
-              print('ARK_DEEPSEEK_SMOKE=CONFIG_MISSING')
+              print('ARK_DEEPSEEK_MATRIX=CONFIG_MISSING')
               sys.exit(2)
 
-          payload = json.dumps({'model': model, 'input': 'hello'}, ensure_ascii=False).encode('utf-8')
-          req = urllib.request.Request(endpoint, data=payload, method='POST', headers={
-              'Authorization': 'Bearer ' + key,
-              'Content-Type': 'application/json',
-              'Accept': 'application/json',
-          })
+          headers={'Authorization':'Bearer '+key,'Content-Type':'application/json','Accept':'application/json'}
 
-          try:
-              with urllib.request.urlopen(req, timeout=60) as resp:
-                  raw = resp.read().decode('utf-8', 'replace')
-                  print('http_status=' + str(resp.status))
-                  obj = json.loads(raw)
-                  print('request=PASS')
-                  print('response_model=' + str(obj.get('model')))
-                  print('response_status=' + str(obj.get('status')))
-                  texts = []
-                  for item in obj.get('output', []) or []:
-                      for part in item.get('content', []) or []:
-                          if part.get('type') == 'output_text' and part.get('text'):
-                              texts.append(part['text'])
-                  print('output_text=' + ((' '.join(texts))[:300] if texts else '<none>'))
-                  print('ARK_DEEPSEEK_SMOKE=PASS')
-          except urllib.error.HTTPError as e:
-              body = e.read().decode('utf-8', 'replace')[:1200].replace('\n', ' ')
-              print('http_status=' + str(e.code))
-              print('request=FAIL')
-              print('http_error=' + repr(body))
-              print('ARK_DEEPSEEK_SMOKE=HTTP_FAIL')
-              sys.exit(3)
-          except Exception as e:
-              print('transport_error=' + type(e).__name__ + ':' + str(e))
-              print('ARK_DEEPSEEK_SMOKE=TRANSPORT_FAIL')
-              sys.exit(4)
+          def call(name, endpoint, payload):
+              req=urllib.request.Request(endpoint,data=json.dumps(payload,ensure_ascii=False).encode(),method='POST',headers=headers)
+              try:
+                  with urllib.request.urlopen(req,timeout=60) as resp:
+                      raw=resp.read().decode('utf-8','replace')
+                      obj=json.loads(raw)
+                      text=''
+                      if 'output' in obj:
+                          parts=[]
+                          for item in obj.get('output',[]) or []:
+                              for p in item.get('content',[]) or []:
+                                  if p.get('type')=='output_text' and p.get('text'): parts.append(p['text'])
+                          text=' '.join(parts)
+                      else:
+                          text=(((obj.get('choices') or [{}])[0].get('message') or {}).get('content') or '')
+                      print(f'case={name} status={resp.status} PASS reply={text[:160]!r}')
+                      return True
+              except urllib.error.HTTPError as e:
+                  body=e.read().decode('utf-8','replace')[:700].replace('\n',' ')
+                  print(f'case={name} status={e.code} FAIL error={body!r}')
+                  return False
+              except Exception as e:
+                  print(f'case={name} transport={type(e).__name__}:{e}')
+                  return False
+
+          results=[]
+          results.append(call('coding_responses_deepseek_v3_2',
+              'https://ark.cn-beijing.volces.com/api/coding/v3/responses',
+              {'model':'deepseek-v3.2','input':'hello'}))
+          results.append(call('coding_chat_deepseek_v3_2',
+              'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions',
+              {'model':'deepseek-v3.2','messages':[{'role':'user','content':'hello'}],'max_tokens':32,'stream':False}))
+          if configured_base and configured_model:
+              endpoint=configured_base if configured_base.endswith('/chat/completions') else configured_base+'/chat/completions'
+              results.append(call('configured_env_chat',endpoint,
+                  {'model':configured_model,'messages':[{'role':'user','content':'hello'}],'max_tokens':32,'stream':False}))
+          print('pass_count=' + str(sum(results)) + '/' + str(len(results)))
+          print('ARK_DEEPSEEK_MATRIX=' + ('PASS' if any(results) else 'FAIL'))
           PY
 
       - name: Publish sanitized result
@@ -90,7 +89,7 @@ jobs:
         run: |
           body="$(cat /tmp/ark_smoke.txt 2>/dev/null || printf '%s\n' 'no probe output')"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "ark-deepseek-responses-smoke:${GITHUB_RUN_ID}" \
+            --title "ark-deepseek-plan-smoke:${GITHUB_RUN_ID}" \
             --body "\`\`\`text
           $body
           \`\`\`"
