@@ -1,0 +1,96 @@
+name: ark-header-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ark_header_smoke.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: ark
+    timeout-minutes: 10
+    env:
+      LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+      ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+    steps:
+      - name: Probe Ark DeepSeek Responses API
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python - <<'PY' | tee /tmp/ark_smoke.txt
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          raw_key = os.getenv('LLM_API_KEY') or os.getenv('ARK_API_KEY') or ''
+          key = raw_key.strip()
+          if key.lower().startswith('bearer '):
+              key = key[7:].strip()
+
+          endpoint = 'https://ark.cn-beijing.volces.com/api/v3/responses'
+          model = 'deepseek-v3-2-251201'
+          print('config.llm_api_key_present=' + str(bool(os.getenv('LLM_API_KEY'))).lower())
+          print('config.ark_api_key_present=' + str(bool(os.getenv('ARK_API_KEY'))).lower())
+          print('endpoint=/api/v3/responses')
+          print('requested_model=' + model)
+
+          if not key:
+              print('ARK_DEEPSEEK_SMOKE=CONFIG_MISSING')
+              sys.exit(2)
+
+          payload = json.dumps({'model': model, 'input': 'hello'}, ensure_ascii=False).encode('utf-8')
+          req = urllib.request.Request(endpoint, data=payload, method='POST', headers={
+              'Authorization': 'Bearer ' + key,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+          })
+
+          try:
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  raw = resp.read().decode('utf-8', 'replace')
+                  print('http_status=' + str(resp.status))
+                  obj = json.loads(raw)
+                  print('request=PASS')
+                  print('response_model=' + str(obj.get('model')))
+                  print('response_status=' + str(obj.get('status')))
+                  texts = []
+                  for item in obj.get('output', []) or []:
+                      for part in item.get('content', []) or []:
+                          if part.get('type') == 'output_text' and part.get('text'):
+                              texts.append(part['text'])
+                  print('output_text=' + ((' '.join(texts))[:300] if texts else '<none>'))
+                  print('ARK_DEEPSEEK_SMOKE=PASS')
+          except urllib.error.HTTPError as e:
+              body = e.read().decode('utf-8', 'replace')[:1200].replace('\n', ' ')
+              print('http_status=' + str(e.code))
+              print('request=FAIL')
+              print('http_error=' + repr(body))
+              print('ARK_DEEPSEEK_SMOKE=HTTP_FAIL')
+              sys.exit(3)
+          except Exception as e:
+              print('transport_error=' + type(e).__name__ + ':' + str(e))
+              print('ARK_DEEPSEEK_SMOKE=TRANSPORT_FAIL')
+              sys.exit(4)
+          PY
+
+      - name: Publish sanitized result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          body="$(cat /tmp/ark_smoke.txt 2>/dev/null || printf '%s\n' 'no probe output')"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "ark-deepseek-responses-smoke:${GITHUB_RUN_ID}" \
+            --body "\`\`\`text
+          $body
+          \`\`\`"
