@@ -1,4 +1,4 @@
-name: ark-online-deepseek-v4-flash-ga-smoke
+name: ark-online-v4-flash-smoke
 
 on:
   push:
@@ -20,28 +20,24 @@ jobs:
       ARK_API_KEY_DIRECT: ${{ secrets.ARK_API_KEY }}
       ARK_API_KEY_GENERIC: ${{ secrets.LLM_API_KEY }}
     steps:
-      - name: Call regular Ark Responses API
+      - name: Probe ordinary Ark responses endpoint
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY' | tee /tmp/ark_probe.txt
           import json, os, urllib.error, urllib.request
-
           key = os.environ.get("ARK_API_KEY_DIRECT") or os.environ.get("ARK_API_KEY_GENERIC")
           if not key:
               raise SystemExit("ARK_KEY=MISSING")
-
           url = "https://ark.cn-beijing.volces.com/api/v3/responses"
-          payload = {
-              "model": "deepseek-v4-flash-ga-260731",
-              "input": "Reply exactly PONG.",
-              "max_output_tokens": 32,
-          }
-          headers = {
-              "Authorization": f"Bearer {key}",
-              "Content-Type": "application/json",
-          }
-          req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+          model = "deepseek-v4-flash-260425"
+          payload = {"model": model, "input": "Reply exactly PONG.", "max_output_tokens": 16}
+          req = urllib.request.Request(
+              url,
+              data=json.dumps(payload).encode(),
+              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+              method="POST",
+          )
           try:
               with urllib.request.urlopen(req, timeout=60) as r:
                   status = r.status
@@ -49,37 +45,32 @@ jobs:
           except urllib.error.HTTPError as e:
               status = e.code
               body = e.read().decode("utf-8", errors="replace")
-
           print("endpoint=/api/v3/responses")
-          print("requested_model=deepseek-v4-flash-ga-260731")
+          print("requested_model=", model)
           print("http_status=", status)
           try:
               data = json.loads(body)
           except Exception:
               data = None
-
           if isinstance(data, dict):
               print("response_model=", data.get("model"))
               print("status_field=", data.get("status"))
               text = data.get("output_text")
               if text is None:
                   for item in data.get("output") or []:
-                      if not isinstance(item, dict):
-                          continue
-                      for part in item.get("content") or []:
-                          if isinstance(part, dict) and part.get("text"):
-                              text = part.get("text")
-                              break
+                      if isinstance(item, dict):
+                          for part in item.get("content") or []:
+                              if isinstance(part, dict) and part.get("text"):
+                                  text = part["text"]
+                                  break
                       if text:
                           break
               print("output_text=", text)
               print("usage=", data.get("usage"))
-              if data.get("error"):
-                  print("error=", data.get("error"))
+              print("error=", data.get("error"))
           else:
               print("body_preview=", body[:1000].replace(key, "***"))
-
-          print("ARK_ONLINE_V4_FLASH_GA=", "PASS" if 200 <= status < 300 else "FAIL")
+          print("ARK_ONLINE_V4_FLASH=", "PASS" if 200 <= status < 300 else "FAIL")
           PY
 
       - name: Publish sanitized probe result
@@ -92,7 +83,7 @@ jobs:
           body="probe step failed before a report was produced"
           [ ! -f /tmp/ark_probe.txt ] || body="$(cat /tmp/ark_probe.txt)"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "ark-online-v4-flash-ga-smoke:${GITHUB_RUN_ID}" \
+            --title "ark-online-v4-flash-smoke:${GITHUB_RUN_ID}" \
             --body "\`\`\`text
           ${body}
           \`\`\`"
