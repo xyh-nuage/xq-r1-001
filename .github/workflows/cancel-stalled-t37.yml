@@ -1,0 +1,19 @@
+name: cancel-stalled-t37
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-t37-609fe06a55ce87543e2159b27742fee8ff6de003
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    if: github.event.issue.user.login == github.repository_owner && github.event.issue.title == 'cancel-stalled-t37'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'replacement run used only to cancel stalled t37 via concurrency'
