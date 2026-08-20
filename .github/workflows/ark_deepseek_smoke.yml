@@ -1,0 +1,69 @@
+name: ark-deepseek-smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/ark_deepseek_smoke.yml'
+
+permissions:
+  contents: read
+
+env:
+  ARK_ENDPOINT: https://ark.cn-beijing.volces.com/api/v3/responses
+  ARK_MODEL: deepseek-v3-2-251201
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: ark
+    timeout-minutes: 5
+    steps:
+      - name: Call Ark DeepSeek once
+        shell: bash
+        env:
+          ARK_API_KEY: ${{ secrets.ARK_API_KEY }}
+          FALLBACK_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          set -euo pipefail
+          key="${ARK_API_KEY:-${FALLBACK_API_KEY:-}}"
+          test -n "$key" || { echo 'ark_api_key=MISSING'; exit 2; }
+
+          body_file="$(mktemp)"
+          http_code="$(curl -sS -o "$body_file" -w '%{http_code}' \
+            "$ARK_ENDPOINT" \
+            -H "Authorization: Bearer $key" \
+            -H 'Content-Type: application/json' \
+            -d "{\"model\":\"$ARK_MODEL\",\"input\":\"hello\"}")"
+
+          python - "$http_code" "$body_file" <<'PY'
+import json, sys
+code = sys.argv[1]
+path = sys.argv[2]
+raw = open(path, 'r', encoding='utf-8').read()
+print(f'http_status={code}')
+try:
+    obj = json.loads(raw)
+except Exception:
+    print('json_parse=FAIL')
+    print(raw[:1200])
+    raise SystemExit(1)
+
+if code != '200':
+    print('request=FAIL')
+    err = obj.get('error', obj)
+    print(json.dumps(err, ensure_ascii=False)[:2000])
+    raise SystemExit(1)
+
+print('request=PASS')
+print('response_model=' + str(obj.get('model')))
+print('response_status=' + str(obj.get('status')))
+texts = []
+for item in obj.get('output', []) or []:
+    for part in item.get('content', []) or []:
+        if part.get('type') == 'output_text' and part.get('text'):
+            texts.append(part['text'])
+print('output_text=' + (' '.join(texts)[:500] if texts else '<none>'))
+PY
+
+          rm -f "$body_file"
