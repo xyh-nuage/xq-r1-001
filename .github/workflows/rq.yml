@@ -22,7 +22,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$REQUEST_AUTHOR" = "$REPOSITORY_OWNER" || { echo 'request=REJECTED'; exit 2; }
-          if [[ "$REQUEST_TITLE" =~ ^rq:t(0(1|1c|1m|1gprep|1adj|1gold|1u|1fas|1fa|2|3|3m|3d|3h|3r|4|5|6|7|8|9)|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|30|31|32|33|34|35|36|37):[0-9a-f]{40}$ ]] || [[ "$REQUEST_TITLE" =~ ^rq:t3(8|9):[0-9a-f]{40}:[AB]:[JT]:[1-5]$ ]]; then
+          if [[ "$REQUEST_TITLE" =~ ^rq:t(0(1|1c|1m|1gprep|1adj|1gold|1u|1fas|1fa|2|3|3m|3d|3h|3r|4|5|6|7|8|9)|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|30|31|32|33|34|35|36|37):[0-9a-f]{40}$ ]] || [[ "$REQUEST_TITLE" =~ ^rq:t3(8|9):[0-9a-f]{40}:[AB]:[JT]:[1-5]$ ]] || [[ "$REQUEST_TITLE" =~ ^rq:t40:[0-9a-f]{40}:[JT]$ ]]; then
             echo 'request=ACCEPTED'
           else
             echo 'request=INVALID'
