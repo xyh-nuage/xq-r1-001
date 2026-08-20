@@ -1,0 +1,197 @@
+name: t39
+
+on:
+  workflow_run:
+    workflows: [rq]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: remote-t39-${{ github.event.workflow_run.display_title }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.display_title, 'rq:t39:')
+    environment: ark
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Resolve exact source and selector
+        id: sel
+        shell: bash
+        env:
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUEST_TITLE" =~ ^rq:t39:([0-9a-f]{40}):([AB]):([JT]):([1-5])$ ]]; then
+            source="${BASH_REMATCH[1]}"
+            candidate="${BASH_REMATCH[2]}"
+            case_id="${BASH_REMATCH[3]}"
+            repeat="${BASH_REMATCH[4]}"
+          else
+            echo 'selector=INVALID'
+            exit 2
+          fi
+          echo "source=$source" >> "$GITHUB_OUTPUT"
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "case_id=$case_id" >> "$GITHUB_OUTPUT"
+          echo "repeat=$repeat" >> "$GITHUB_OUTPUT"
+          echo "harness=$REQUEST_HARNESS_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Publish safe run locator
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh issue create --repo "${{ github.repository }}" --title "t39-ark-single:${{ steps.sel.outputs.candidate }}:${{ steps.sel.outputs.case_id }}:${{ steps.sel.outputs.repeat }}:run${{ github.run_id }}" --body "Ark diagnostic single semantic sample for Context Bundle targeted ablation. Diagnostic only; not part of preregistered Shangtang screening denominator. No private content."
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init -q "$RUNNER_TEMP/harness"
+          git -C "$RUNNER_TEMP/harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$RUNNER_TEMP/harness" fetch -q --depth=1 origin "${{ steps.sel.outputs.harness }}"
+          git -C "$RUNNER_TEMP/harness" checkout -q --detach FETCH_HEAD
+
+      - name: Verify private result write access before model call
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/harness/scripts/private_results_preflight.py"
+
+      - name: Prepare exact private source and immutable packet
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/context-bundle-v2-ark-single"
+          repo="$root/source"
+          input="$root/input"
+          mkdir -p "$input/packets"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t39-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.sel.outputs.source }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.sel.outputs.source }}"
+          packet_commit="01285f526db49ae4d51bdfb351632bc048884ad5"
+          prefix="evaluation_results/research_matter_phase0_candidates/2026-08-19_cec83f7c_run32268255221/candidate_packets"
+          git -C "$repo" fetch -q --depth=1 origin "$packet_commit"
+          git -C "$repo" show "$packet_commit:$prefix/2026-07-08_8e2cfc446694.txt" > "$input/packets/jiekun.txt"
+          git -C "$repo" show "$packet_commit:$prefix/2026-07-16_84f34dbd5f23.txt" > "$input/packets/zhongtai.txt"
+          test "$(git hash-object "$input/packets/jiekun.txt")" = "c40af9f54936a4da9c1b9e3bda4678c770317486"
+          test "$(git hash-object "$input/packets/zhongtai.txt")" = "99c5cb5587608cc140070b1482b2442746081252"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'private_source=VERIFIED_EXACT_SHA'
+          echo 'packet_inputs=VERIFIED_IMMUTABLE'
+
+      - name: Validate single-sample runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-bundle-v2-ark-single/source"
+          cd "$repo"
+          python -m py_compile l1/tools/context_bundle_scorer.py l1/tools/run_research_context_bundle_ab.py l1/tools/run_context_bundle_targeted_ablation_v2_single.py
+
+      - name: Verify Ark model configuration
+        shell: bash
+        env:
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          test -n "$L1_LLM_API_KEY"
+          test -n "$L1_LLM_BASE_URL"
+          test -n "$L1_LLM_MODEL"
+          echo 'ark_environment=CONFIG_PRESENT'
+
+      - name: Run exactly one Ark semantic sample
+        shell: bash
+        env:
+          L1_LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          L1_LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          L1_LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          L1_LLM_TIMEOUT_SECONDS: '300'
+          L1_LLM_MAX_RETRIES: '3'
+          L1_LLM_RETRY_BACKOFF_SECONDS: '60'
+          RESEARCH_MATTER_V2_MAX_TOKENS: '25000'
+          L1_LLM_MAX_COMPLETION_FIELD: 'max_tokens'
+          L1_LLM_DISABLE_REASONING: 'false'
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-bundle-v2-ark-single/source"
+          input="$RUNNER_TEMP/context-bundle-v2-ark-single/input"
+          out="$repo/l1/evaluation/vnext/runtime/research_context_bundle_targeted_ablation_v2_ark_single"
+          rm -rf "$out"
+          python "$repo/l1/tools/run_context_bundle_targeted_ablation_v2_single.py" \
+            --candidate "${{ steps.sel.outputs.candidate }}" \
+            --case "${{ steps.sel.outputs.case_id }}" \
+            --repeat "${{ steps.sel.outputs.repeat }}" \
+            --input-dir "$input" --output-dir "$out" \
+            --source-sha "${{ steps.sel.outputs.source }}"
+
+      - name: Publish safe Ark single-sample audit
+        shell: bash
+        run: |
+          cat "$RUNNER_TEMP/context-bundle-v2-ark-single/source/l1/evaluation/vnext/runtime/research_context_bundle_targeted_ablation_v2_ark_single/SAFE.json"
+
+      - name: Persist private Ark diagnostic result
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-bundle-v2-ark-single/source"
+          base="l1/evaluation/vnext/runtime/research_context_bundle_targeted_ablation_v2_ark_single"
+          date_utc="$(date -u +%F)"
+          python "$RUNNER_TEMP/harness/scripts/private_results_publisher.py" \
+            --source-root "$repo" \
+            --source-sha "${{ steps.sel.outputs.source }}" \
+            --harness-sha "${{ steps.sel.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" \
+            --date "$date_utc" \
+            --evaluation "research_context_bundle_targeted_ablation_v2_ark_single" \
+            --copy "$base/single_result.json=single_result.json" \
+            --copy "$base/SAFE.json=SAFE.json" \
+            --copy "l1/evaluation/research_matter_three_validation/context_bundle_targeted_ablation_v2_manifest.v1.json=context_bundle_targeted_ablation_v2_manifest.v1.json" \
+            --copy "l1/evaluation/research_matter_three_validation/context_bundle_prompt_contract.v1_2_business_context.txt=context_bundle_prompt_contract.v1_2_business_context.txt"
+
+      - name: Terminal marker
+        shell: bash
+        run: |
+          echo 'RESEARCH_CONTEXT_BUNDLE_TARGETED_ABLATION_V2_ARK_DIAGNOSTIC_SINGLE_PASS'
+          echo 'semantic_samples_this_run=1'
+          echo 'diagnostic_only=1'
+          echo 'preregistered_shangtang_denominator=0'
+          echo 'unseen_used=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$RUNNER_TEMP/context-bundle-v2-ark-single" "$RUNNER_TEMP/harness" "$RUNNER_TEMP/t39-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight"
