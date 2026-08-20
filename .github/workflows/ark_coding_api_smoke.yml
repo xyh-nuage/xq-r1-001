@@ -1,4 +1,4 @@
-name: ark-online-v4-flash-smoke
+name: ark-online-deepseek-availability-smoke
 
 on:
   push:
@@ -15,62 +15,116 @@ jobs:
   probe:
     environment: ark
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     env:
       ARK_API_KEY_DIRECT: ${{ secrets.ARK_API_KEY }}
       ARK_API_KEY_GENERIC: ${{ secrets.LLM_API_KEY }}
     steps:
-      - name: Probe ordinary Ark responses endpoint
+      - name: Probe activated-list and mainstream DeepSeek models
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY' | tee /tmp/ark_probe.txt
           import json, os, urllib.error, urllib.request
+
           key = os.environ.get("ARK_API_KEY_DIRECT") or os.environ.get("ARK_API_KEY_GENERIC")
           if not key:
               raise SystemExit("ARK_KEY=MISSING")
-          url = "https://ark.cn-beijing.volces.com/api/v3/responses"
-          model = "deepseek-v4-flash-260425"
-          payload = {"model": model, "input": "Reply exactly PONG.", "max_output_tokens": 16}
-          req = urllib.request.Request(
-              url,
-              data=json.dumps(payload).encode(),
-              headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-              method="POST",
+
+          def req(method, url, payload=None, headers=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              h = headers or {}
+              r = urllib.request.Request(url, data=data, headers=h, method=method)
+              try:
+                  with urllib.request.urlopen(r, timeout=90) as resp:
+                      return resp.status, resp.read().decode("utf-8", errors="replace")
+              except urllib.error.HTTPError as e:
+                  return e.code, e.read().decode("utf-8", errors="replace")
+              except Exception as e:
+                  return -1, f"{type(e).__name__}: {e}"
+
+          def parse(body):
+              try: return json.loads(body)
+              except Exception: return None
+
+          print("=== A) Try management ListModelActivations with this Bearer key ===")
+          mgmt_url = "https://ark.cn-beijing.volcengineapi.com/?Action=ListModelActivations&Version=2024-01-01"
+          status, body = req(
+              "POST", mgmt_url,
+              {"PageNumber": 1, "PageSize": 100, "Filter": {"States": ["Available"]}},
+              {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
           )
-          try:
-              with urllib.request.urlopen(req, timeout=60) as r:
-                  status = r.status
-                  body = r.read().decode("utf-8", errors="replace")
-          except urllib.error.HTTPError as e:
-              status = e.code
-              body = e.read().decode("utf-8", errors="replace")
-          print("endpoint=/api/v3/responses")
-          print("requested_model=", model)
-          print("http_status=", status)
-          try:
-              data = json.loads(body)
-          except Exception:
-              data = None
+          print("status=", status)
+          data = parse(body)
           if isinstance(data, dict):
-              print("response_model=", data.get("model"))
-              print("status_field=", data.get("status"))
-              text = data.get("output_text")
-              if text is None:
-                  for item in data.get("output") or []:
-                      if isinstance(item, dict):
-                          for part in item.get("content") or []:
-                              if isinstance(part, dict) and part.get("text"):
-                                  text = part["text"]
-                                  break
-                      if text:
-                          break
-              print("output_text=", text)
-              print("usage=", data.get("usage"))
-              print("error=", data.get("error"))
+              result = data.get("Result") or {}
+              items = result.get("Items") if isinstance(result, dict) else None
+              if isinstance(items, list):
+                  print("activated_models=", [x.get("FoundationModelName") for x in items if isinstance(x, dict)])
+              else:
+                  meta = data.get("ResponseMetadata") or {}
+                  err = meta.get("Error") if isinstance(meta, dict) else None
+                  print("management_error=", err or data.get("error") or str(data)[:700])
           else:
-              print("body_preview=", body[:1000].replace(key, "***"))
-          print("ARK_ONLINE_V4_FLASH=", "PASS" if 200 <= status < 300 else "FAIL")
+              print("body_preview=", body[:700].replace(key, "***"))
+
+          print("=== B) Ordinary /api/v3/chat/completions DeepSeek matrix ===")
+          models = [
+              "deepseek-v4-pro-ga-260813",
+              "deepseek-v4-flash-ga-260731",
+              "deepseek-v4-pro-260425",
+              "deepseek-v4-flash-260425",
+              "deepseek-v4-pro",
+              "deepseek-v4-flash",
+              "deepseek-v3-2-251201",
+              "deepseek-v3-1-terminus",
+              "deepseek-v3-1-250821",
+              "deepseek-r1-250528",
+              "deepseek-v3-250324",
+              "deepseek-r1-250120",
+          ]
+          base = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
+          headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+          usable = []
+          for model in models:
+              status, body = req("POST", base, {
+                  "model": model,
+                  "messages": [{"role": "user", "content": "Reply exactly OK."}],
+                  "stream": False,
+                  "max_tokens": 32,
+              }, headers)
+              data = parse(body)
+              code = None
+              msg = None
+              returned_model = None
+              content = None
+              if isinstance(data, dict):
+                  returned_model = data.get("model")
+                  err = data.get("error")
+                  if isinstance(err, dict):
+                      code = err.get("code")
+                      msg = err.get("message")
+                  choices = data.get("choices") or []
+                  if choices and isinstance(choices[0], dict):
+                      m = choices[0].get("message") or {}
+                      if isinstance(m, dict):
+                          content = m.get("content")
+              ok = 200 <= status < 300
+              if ok:
+                  usable.append(model)
+              print(json.dumps({
+                  "model": model,
+                  "http": status,
+                  "usable": ok,
+                  "returned_model": returned_model,
+                  "content": content[:80] if isinstance(content, str) else content,
+                  "error_code": code,
+                  "error_message": msg[:240] if isinstance(msg, str) else msg,
+              }, ensure_ascii=False))
+
+          print("=== RESULT ===")
+          print("usable_models=", usable)
+          print("usable_count=", len(usable))
           PY
 
       - name: Publish sanitized probe result
@@ -83,7 +137,7 @@ jobs:
           body="probe step failed before a report was produced"
           [ ! -f /tmp/ark_probe.txt ] || body="$(cat /tmp/ark_probe.txt)"
           gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "ark-online-v4-flash-smoke:${GITHUB_RUN_ID}" \
+            --title "ark-deepseek-availability-smoke:${GITHUB_RUN_ID}" \
             --body "\`\`\`text
           ${body}
           \`\`\`"
