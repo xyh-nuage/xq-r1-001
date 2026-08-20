@@ -175,7 +175,7 @@ jobs:
             --harness-sha "${{ steps.sel.outputs.harness }}" \
             --run-id "${{ github.run_id }}" \
             --date "$date_utc" \
-            --evaluation "research_context_bundle_targeted_ablation_v2_single_${{ steps.sel.outputs.candidate }}_${{ steps.sel.outputs.case_id }}_${{ steps.sel.outputs.repeat }}" \
+            --evaluation "research_context_bundle_targeted_ablation_v2_single" \
             --copy "$base/single_result.json=single_result.json" \
             --copy "$base/SAFE.json=SAFE.json" \
             --copy "l1/evaluation/research_matter_three_validation/context_bundle_targeted_ablation_v2_manifest.v1.json=context_bundle_targeted_ablation_v2_manifest.v1.json" \
