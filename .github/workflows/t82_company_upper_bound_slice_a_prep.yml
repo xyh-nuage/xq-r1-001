@@ -47,13 +47,14 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install -q pytest
+          cd private-knowledge
           python -m py_compile \
-            private-knowledge/company/tools/validated_4948_projection.py \
-            private-knowledge/company/tools/build_company_matter_capability_slice_a.py \
-            private-knowledge/company/tools/run_company_matter_capability_slice_a.py
+            company/tools/validated_4948_projection.py \
+            company/tools/build_company_matter_capability_slice_a.py \
+            company/tools/run_company_matter_capability_slice_a.py
           python -m pytest -q \
-            private-knowledge/company/tests/test_validated_4948_projection.py \
-            private-knowledge/company/tests/test_company_matter_capability_slice_a.py
+            company/tests/test_validated_4948_projection.py \
+            company/tests/test_company_matter_capability_slice_a.py
 
       - name: Build exact cross-group chronological context
         shell: bash
