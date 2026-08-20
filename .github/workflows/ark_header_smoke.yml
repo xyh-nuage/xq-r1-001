@@ -1,5 +1,6 @@
 name: ark-header-smoke
 
+# probe-version: 2
 on:
   push:
     branches: [main]
