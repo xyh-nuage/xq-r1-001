@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   probe:
@@ -23,9 +24,11 @@ jobs:
       ARK_MODEL: ${{ secrets.ARK_MODEL }}
     steps:
       - name: Probe Ark header compatibility
+        continue-on-error: true
         shell: bash
         run: |
-          python - <<'PY'
+          set -o pipefail
+          python - <<'PY' | tee /tmp/ark_smoke.txt
           import json
           import os
           import sys
@@ -47,10 +50,7 @@ jobs:
               sys.exit(2)
 
           base = base.rstrip('/')
-          if base.endswith('/chat/completions'):
-              endpoint = base
-          else:
-              endpoint = base + '/chat/completions'
+          endpoint = base if base.endswith('/chat/completions') else base + '/chat/completions'
 
           payload = json.dumps({
               'model': model,
@@ -115,3 +115,16 @@ jobs:
           print('ARK_SMOKE=NO_HEADER_SET_WORKS')
           sys.exit(3)
           PY
+
+      - name: Publish sanitized result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          body="$(cat /tmp/ark_smoke.txt 2>/dev/null || printf '%s\n' 'no probe output')"
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "ark-header-smoke:${GITHUB_RUN_ID}" \
+            --body "\`\`\`text
+          $body
+          \`\`\`"
