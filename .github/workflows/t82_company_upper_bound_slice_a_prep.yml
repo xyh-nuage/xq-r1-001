@@ -98,7 +98,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          repo="private-knowledge"
+          repo="$GITHUB_WORKSPACE/private-knowledge"
           base="company/evaluation/matter_capability_upper_bound_slice_a/prepared"
           eval_date="$(date -u +%F)"
           python scripts/private_results_publisher.py \
