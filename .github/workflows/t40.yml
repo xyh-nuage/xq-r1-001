@@ -205,6 +205,7 @@ jobs:
             --date "$date_utc" \
             --evaluation "research_direct_short_term_matter_minimal_single" \
             --copy "$base/single_result.json=single_result.json" \
+            --copy "$base/raw_model_json.json=raw_model_json.json" \
             --copy "$base/SAFE.json=SAFE.json" \
             --copy "$base/RUN_PROVENANCE.json=RUN_PROVENANCE.json" \
             --copy "l1/evaluation/research_matter_three_validation/direct_short_term_matter_prompt.v1.txt=direct_short_term_matter_prompt.v1.txt"
