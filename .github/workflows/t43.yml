@@ -9,7 +9,7 @@ on:
         required: true
         type: string
   workflow_run:
-    workflows: [rq]
+    workflows: [rq43]
     types: [completed]
 
 permissions:
@@ -139,6 +139,8 @@ jobs:
               print('pytest_result=FAIL')
               print(summary)
               raise SystemExit(p.returncode)
+          if counts['passed'] == 0:
+              raise SystemExit('pytest aggregate summary missing')
           print('FAILED_TESTS=NONE')
           print('pytest_result=PASS')
           PY
