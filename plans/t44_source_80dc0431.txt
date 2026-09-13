@@ -1,0 +1,4 @@
+task_id=CONTEXT-MEMORY-REAL-ADAPTER-RELATION-006
+source_sha=80dc043190ea583c7de380e8009daac8e65121cd
+source_branch=codex/context-memory-kernel-001
+merge=0
