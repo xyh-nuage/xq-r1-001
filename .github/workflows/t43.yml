@@ -132,13 +132,14 @@ jobs:
               try:
                   root=ET.parse(report).getroot()
                   for case in root.iter('testcase'):
-                      node=case.find('failure') or case.find('error')
+                      node=case.find('failure')
+                      if node is None:
+                          node=case.find('error')
                       if node is None:
                           continue
                       name=f"{case.attrib.get('classname','')}::{case.attrib.get('name','')}"
                       failed.append(name)
                       body=(node.text or '').strip().splitlines()
-                      # Test files contain synthetic data; emit only exception/trace tail, never captured stdout.
                       safe_tail=' | '.join(body[-2:])[:500] if body else str(node.attrib.get('message',''))[:500]
                       diagnostics.append(name+' => '+safe_tail)
               except Exception as exc:
