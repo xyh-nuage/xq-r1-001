@@ -108,8 +108,9 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/context-memory-v02-source"
           python - <<'PY'
-          import re, subprocess, sys
-          cmd=[sys.executable,'-m','pytest','-q','l1/tests/context_memory/test_v02_scenarios.py','l1/tests/context_memory/test_kernel.py','l1/tests/context_memory/test_contract_schemas.py']
+          import re, subprocess, sys, xml.etree.ElementTree as ET
+          report='/tmp/t41-junit.xml'
+          cmd=[sys.executable,'-m','pytest','-q','--junitxml',report,'l1/tests/context_memory/test_v02_scenarios.py','l1/tests/context_memory/test_kernel.py','l1/tests/context_memory/test_contract_schemas.py']
           p=subprocess.run(cmd,text=True,capture_output=True)
           text=(p.stdout or '')+'\n'+(p.stderr or '')
           summary=''
@@ -121,11 +122,23 @@ jobs:
               counts['errors' if k in ('error','errors') else k]=int(n)
           print('PYTEST_AUDIT=' + ','.join(f'{k}={counts[k]}' for k in counts))
           if p.returncode != 0:
+              failed=[]
+              try:
+                  root=ET.parse(report).getroot()
+                  for case in root.iter('testcase'):
+                      if case.find('failure') is not None or case.find('error') is not None:
+                          classname=case.attrib.get('classname','')
+                          name=case.attrib.get('name','')
+                          failed.append(f'{classname}::{name}')
+              except Exception:
+                  failed=[]
+              print('FAILED_TESTS=' + (';'.join(failed) if failed else 'UNAVAILABLE'))
               print('pytest_result=FAIL')
               print(summary)
               raise SystemExit(p.returncode)
           if counts['passed'] == 0:
               raise SystemExit('pytest aggregate summary missing')
+          print('FAILED_TESTS=NONE')
           print('pytest_result=PASS')
           PY
 
@@ -141,4 +154,4 @@ jobs:
       - name: Cleanup
         if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/context-memory-v02-source" "$RUNNER_TEMP/t41-read-askpass.sh"
+        run: rm -rf "$RUNNER_TEMP/context-memory-v02-source" "$RUNNER_TEMP/t41-read-askpass.sh" /tmp/t41-junit.xml
