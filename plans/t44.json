@@ -1,0 +1,23 @@
+{
+  "target": "t44",
+  "task_id": "CONTEXT-MEMORY-REAL-ADAPTER-RELATION-006",
+  "source_repository": "xyh-nuage/knowledge",
+  "source_branch": "codex/context-memory-kernel-001",
+  "execution": "fully_remote",
+  "steps": [
+    "verify exact private SHA",
+    "compile context-memory integration modules",
+    "run explicit relation integration and existing v0.2 regression tests",
+    "run old c1-pending 20-message baseline",
+    "run explicit-relations 20-message probe",
+    "emit aggregate audit and terminal marker"
+  ],
+  "constraints": {
+    "raw_private_messages_public": false,
+    "live_model_calls": 0,
+    "gold_silver_runtime_input": false,
+    "sealed_unseen_runtime_input": false,
+    "merge": false,
+    "force_push": false
+  }
+}
