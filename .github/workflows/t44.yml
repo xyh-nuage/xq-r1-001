@@ -1,0 +1,262 @@
+name: t44-context-memory-explicit-relation-integration
+run-name: t44:${{ github.event.workflow_run.display_title || inputs.source_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: exact private context-memory explicit-relation source commit
+        required: true
+        type: string
+  workflow_run:
+    workflows: [rq44]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-t44-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t44:'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Resolve exact source and frozen harness
+        id: source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_SHA: ${{ inputs.source_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          CURRENT_HARNESS_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            source="${REQUEST_TITLE#rq:t44:}"
+            harness="$REQUEST_HARNESS_SHA"
+          else
+            source="$DISPATCH_SHA"
+            harness="$CURRENT_HARNESS_SHA"
+          fi
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source"
+          echo "harness_sha=$harness"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout exact private source
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/context-memory-explicit-relation-source"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t44-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'private_source=VERIFIED_EXACT_SHA'
+
+      - name: Install deterministic dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/context-memory-explicit-relation-source"
+          python -m pip install -q -e 'l1[dev]'
+
+      - name: Compile integration modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/context-memory-explicit-relation-source"
+          python -m py_compile \
+            l1/l1_processor/context_memory/real_slice_adapters.py \
+            l1/l1_processor/context_memory/explicit_relation_adapter.py \
+            l1/evaluation/context_memory_real_adapter_probe/run_probe.py \
+            l1/l1_processor/context_memory/v02_contracts.py \
+            l1/l1_processor/context_memory/v02_engine.py \
+            l1/l1_processor/context_memory/v02_serialization.py \
+            l1/l1_processor/context_memory/v02_store.py
+          echo 'compile=PASS'
+
+      - name: Run explicit relation and v0.2 regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/context-memory-explicit-relation-source"
+          python - <<'PY'
+          import re, subprocess, sys, xml.etree.ElementTree as ET
+          report='/tmp/t44-junit.xml'
+          cmd=[
+              sys.executable,'-m','pytest','-q','--junitxml',report,
+              'l1/tests/context_memory/test_explicit_relation_integration.py',
+              'l1/tests/context_memory/test_real_adapter_probe.py',
+              'l1/tests/context_memory/test_v02_hardening.py',
+              'l1/tests/context_memory/test_v02_scenarios.py',
+          ]
+          p=subprocess.run(cmd,text=True,capture_output=True)
+          text=(p.stdout or '')+'\n'+(p.stderr or '')
+          summary=''
+          for line in reversed(text.splitlines()):
+              if re.search(r'\b(passed|failed|error|errors|skipped|xfailed|xpassed)\b', line):
+                  summary=line.strip(); break
+          counts={k:0 for k in ('passed','failed','skipped','xfailed','xpassed','deselected','errors')}
+          for n,k in re.findall(r'(\d+)\s+(passed|failed|skipped|xfailed|xpassed|deselected|errors?)', summary):
+              counts['errors' if k in ('error','errors') else k]=int(n)
+          print('PYTEST_AUDIT=' + ','.join(f'{k}={counts[k]}' for k in counts))
+          if p.returncode != 0:
+              failed=[]
+              diagnostics=[]
+              try:
+                  root=ET.parse(report).getroot()
+                  for case in root.iter('testcase'):
+                      node=case.find('failure')
+                      if node is None:
+                          node=case.find('error')
+                      if node is None:
+                          continue
+                      name=f"{case.attrib.get('classname','')}::{case.attrib.get('name','')}"
+                      failed.append(name)
+                      body=(node.text or '').strip().splitlines()
+                      safe_tail=' | '.join(body[-2:])[:500] if body else str(node.attrib.get('message',''))[:500]
+                      diagnostics.append(name+' => '+safe_tail)
+              except Exception as exc:
+                  diagnostics.append('junit-parse => '+type(exc).__name__)
+              print('FAILED_TESTS=' + (';'.join(failed) if failed else 'UNAVAILABLE'))
+              for item in diagnostics:
+                  print('FAIL_DIAG='+item)
+              print('pytest_result=FAIL')
+              print(summary)
+              raise SystemExit(p.returncode)
+          if counts['passed'] == 0:
+              raise SystemExit('pytest aggregate summary missing')
+          print('FAILED_TESTS=NONE')
+          print('pytest_result=PASS')
+          PY
+
+      - name: Run old bounded probe baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/context-memory-explicit-relation-source"
+          export PYTHONPATH="$PWD/l1:$PWD"
+          python l1/evaluation/context_memory_real_adapter_probe/run_probe.py \
+            --limit 20 \
+            --relation-mode c1-pending \
+            --source-sha '${{ steps.source.outputs.value }}' \
+            --db /tmp/t44-old.sqlite \
+            --output-json /tmp/t44-old.json \
+            >/tmp/t44-old-private.log
+          python - <<'PY'
+          import json
+          r=json.load(open('/tmp/t44-old.json',encoding='utf-8'))
+          c=r['counts']
+          safe={
+              'selected_messages':c['selected_messages'],
+              'shared_l1_units':c['shared_l1_units'],
+              'accepted_work_items':c['accepted_work_items'],
+              'accepted_claims':c['accepted_claims'],
+              'open_claim_pending':c['open_claim_pending'],
+              'business_relation_pending':c['business_relation_pending'],
+              'future_candidate_violations':r['future_candidate_violations'],
+              'restart_readback_equal':r['restart_readback_equal'],
+          }
+          print('OLD_PROBE_SAFE_AUDIT='+json.dumps(safe,sort_keys=True,separators=(',',':')))
+          assert c['selected_messages']==20
+          assert c['accepted_work_items']==20
+          assert c['accepted_claims']+c['open_claim_pending']==c['shared_l1_units']
+          assert r['future_candidate_violations']==0
+          assert r['restart_readback_equal'] is True
+          assert c['confirmed_source_edges']==0
+          assert c['ambiguous_source_edges']==0
+          assert 'RELATION_ACCEPTED' not in r['event_types']
+          PY
+
+      - name: Run explicit-relations bounded probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/context-memory-explicit-relation-source"
+          export PYTHONPATH="$PWD/l1:$PWD"
+          python l1/evaluation/context_memory_real_adapter_probe/run_probe.py \
+            --limit 20 \
+            --relation-mode explicit-relations \
+            --source-sha '${{ steps.source.outputs.value }}' \
+            --db /tmp/t44-explicit.sqlite \
+            --output-json /tmp/t44-explicit.json \
+            >/tmp/t44-explicit-private.log
+          python - <<'PY'
+          import json
+          r=json.load(open('/tmp/t44-explicit.json',encoding='utf-8'))
+          c=r['counts']
+          safe={
+              'selected_messages':c['selected_messages'],
+              'shared_l1_units':c['shared_l1_units'],
+              'accepted_work_items':c['accepted_work_items'],
+              'accepted_claims':c['accepted_claims'],
+              'open_claim_pending':c['open_claim_pending'],
+              'c1_candidates_total':c['c1_candidates_total'],
+              'confirmed_source_edges':c['confirmed_source_edges'],
+              'ambiguous_source_edges':c['ambiguous_source_edges'],
+              'support_only_evidence':c['support_only_evidence'],
+              'business_relation_pending':c['business_relation_pending'],
+              'future_candidate_violations':r['future_candidate_violations'],
+              'restart_readback_equal':r['restart_readback_equal'],
+              'decision_revision':c['decision_revision'],
+              'source_relation_types':r['source_relation_types'],
+          }
+          print('EXPLICIT_PROBE_SAFE_AUDIT='+json.dumps(safe,sort_keys=True,separators=(',',':')))
+          assert c['selected_messages']==20
+          assert c['accepted_work_items']==20
+          assert c['accepted_claims']+c['open_claim_pending']==c['shared_l1_units']
+          assert r['future_candidate_violations']==0
+          assert r['restart_readback_equal'] is True
+          assert r['input_contract']['live_model_calls']==0
+          assert r['input_contract']['gold_or_silver_runtime_input'] is False
+          assert r['input_contract']['sealed_unseen_runtime_input'] is False
+          assert 'RELATION_ACCEPTED' not in r['event_types']
+          assert set(r['source_relation_types']).issubset({'source_reply_to','source_quotes','source_shares_attachment'})
+          PY
+
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'CONTEXT_MEMORY_EXPLICIT_RELATION_REMOTE_CI_PASS'
+          echo 'old_probe_mode_pass=1'
+          echo 'explicit_relation_mode_pass=1'
+          echo 'raw_chat_bodies_emitted_to_public_log=0'
+          echo 'live_model_calls=0'
+          echo 'gold_silver_runtime_input=0'
+          echo 'sealed_unseen_runtime_input=0'
+          echo 'merge_performed=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/context-memory-explicit-relation-source" "$RUNNER_TEMP/t44-read-askpass.sh" /tmp/t44-*
