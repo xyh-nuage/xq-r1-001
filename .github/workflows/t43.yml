@@ -128,14 +128,24 @@ jobs:
           print('PYTEST_AUDIT=' + ','.join(f'{k}={counts[k]}' for k in counts))
           if p.returncode != 0:
               failed=[]
+              diagnostics=[]
               try:
                   root=ET.parse(report).getroot()
                   for case in root.iter('testcase'):
-                      if case.find('failure') is not None or case.find('error') is not None:
-                          failed.append(f"{case.attrib.get('classname','')}::{case.attrib.get('name','')}")
-              except Exception:
-                  pass
+                      node=case.find('failure') or case.find('error')
+                      if node is None:
+                          continue
+                      name=f"{case.attrib.get('classname','')}::{case.attrib.get('name','')}"
+                      failed.append(name)
+                      body=(node.text or '').strip().splitlines()
+                      # Test files contain synthetic data; emit only exception/trace tail, never captured stdout.
+                      safe_tail=' | '.join(body[-2:])[:500] if body else str(node.attrib.get('message',''))[:500]
+                      diagnostics.append(name+' => '+safe_tail)
+              except Exception as exc:
+                  diagnostics.append('junit-parse => '+type(exc).__name__)
               print('FAILED_TESTS=' + (';'.join(failed) if failed else 'UNAVAILABLE'))
+              for item in diagnostics:
+                  print('FAIL_DIAG='+item)
               print('pytest_result=FAIL')
               print(summary)
               raise SystemExit(p.returncode)
