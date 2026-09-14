@@ -1,5 +1,5 @@
 name: t45s-context-memory-membership-routing-deterministic
-run-name: t45s:92cd76d8b0bbb7548710a55900a6a2c91536dc15
+run-name: t45s:9ec88b04e87fd3bb225bb09ca86428beea53aeaa
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
         shell: bash
         env:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
-          SOURCE_SHA: 92cd76d8b0bbb7548710a55900a6a2c91536dc15
+          SOURCE_SHA: 9ec88b04e87fd3bb225bb09ca86428beea53aeaa
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 2
@@ -52,7 +52,7 @@ jobs:
           set -euo pipefail
           cd "$RUNNER_TEMP/t45s-source"
           python -m pip install -q -e 'l1[dev]'
-      - name: Compile repaired routing modules
+      - name: Compile repaired routing and replay modules
         shell: bash
         run: |
           set -euo pipefail
@@ -64,7 +64,9 @@ jobs:
             l1/l1_processor/context_memory/membership_context.py \
             l1/l1_processor/context_memory/v02_contracts.py \
             l1/l1_processor/context_memory/v02_engine.py \
-            l1/l1_processor/context_memory/v02_store.py
+            l1/l1_processor/context_memory/v02_store.py \
+            l1/evaluation/context_memory_business_replay/run_replay.py \
+            l1/evaluation/context_memory_business_replay/evaluate_replay.py
           echo 'compile=PASS'
       - name: Run deterministic regression tests
         shell: bash
@@ -73,10 +75,20 @@ jobs:
           cd "$RUNNER_TEMP/t45s-source"
           python -m pytest -q \
             l1/tests/context_memory/test_membership_routing.py \
+            l1/tests/context_memory/test_business_replay_adapter.py \
             l1/tests/context_memory/test_explicit_relation_integration.py \
             l1/tests/context_memory/test_real_adapter_probe.py \
             l1/tests/context_memory/test_v02_hardening.py \
             l1/tests/context_memory/test_v02_scenarios.py
+      - name: Validate frozen six-case input adapter without references
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/t45s-source"
+          export PYTHONPATH="$PWD/l1:$PWD"
+          python l1/evaluation/context_memory_business_replay/run_replay.py \
+            --research-root l1/evaluation/research_current_effective_state_full_matter \
+            --validate-inputs
       - name: Verify inference boundary
         shell: bash
         run: |
@@ -85,16 +97,22 @@ jobs:
           export PYTHONPATH="$PWD/l1:$PWD"
           python - <<'PY'
           from dataclasses import fields
+          from pathlib import Path
           from l1_processor.context_memory.membership_routing import RoutingContext
           names={f.name.lower() for f in fields(RoutingContext)}
           assert not ({'gold','reference','reference_answer'} & names)
+          source=Path('l1/evaluation/context_memory_business_replay/run_replay.py').read_text(encoding='utf-8')
+          for forbidden in ('update_reference.v2.json','mixed_diagnostic_reference.v1.json','reference_clusters','NEW_T7','NEW_T8','NEW_T9','NEW_J10'):
+              assert forbidden not in source, forbidden
           print('model_input_reference_fields=0')
+          print('business_replay_runtime_reference_files=0')
           PY
       - name: Terminal audit marker
         shell: bash
         run: |
           echo 'CONTEXT_MEMORY_MEMBERSHIP_ROUTING_DETERMINISTIC_CI_PASS'
-          echo 'source_sha=92cd76d8b0bbb7548710a55900a6a2c91536dc15'
+          echo 'CONTEXT_MEMORY_BUSINESS_REPLAY_ADAPTER_DETERMINISTIC_PASS'
+          echo 'source_sha=9ec88b04e87fd3bb225bb09ca86428beea53aeaa'
           echo 'live_model_calls=0'
           echo 'gold_reference_model_input=0'
           echo 'merge_performed=0'
