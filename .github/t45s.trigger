@@ -1,2 +1,2 @@
-source_sha=92cd76d8b0bbb7548710a55900a6a2c91536dc15
-purpose=CONTEXT-MEMORY-MEMBERSHIP-ROUTING-007 deterministic exact-SHA diagnostic after pending schema fix
+source_sha=9ec88b04e87fd3bb225bb09ca86428beea53aeaa
+purpose=CONTEXT-MEMORY-MEMBERSHIP-ROUTING-007 deterministic exact-SHA validation with business replay adapter
