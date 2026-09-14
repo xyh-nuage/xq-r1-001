@@ -1,3 +1,4 @@
+# Infrastructure refresh only: re-register rq45 as the sealed request source for t45.
 name: rq45
 run-name: ${{ github.event.issue.title }}
 
