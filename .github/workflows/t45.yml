@@ -1,6 +1,6 @@
-# Infrastructure refresh only: re-register sealed t45 workflow; deterministic plan unchanged.
+# Sealed t45 deterministic target. Push trigger is restricted to this workflow file and uses a hard-coded exact private SHA for bridge diagnostics.
 name: t45-context-memory-membership-routing-deterministic
-run-name: t45:${{ github.event.workflow_run.display_title || inputs.source_sha }}
+run-name: t45:${{ github.event.workflow_run.display_title || inputs.source_sha || 'sealed-push' }}
 
 on:
   workflow_dispatch:
@@ -12,6 +12,9 @@ on:
   workflow_run:
     workflows: [rq45]
     types: [completed]
+  push:
+    branches: [main]
+    paths: [.github/workflows/t45.yml]
 
 permissions:
   contents: read
@@ -24,6 +27,7 @@ jobs:
   run:
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'push' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.display_title, 'rq:t45:'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -37,11 +41,15 @@ jobs:
           REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
           REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
           CURRENT_HARNESS_SHA: ${{ github.sha }}
+          SEALED_PUSH_SOURCE_SHA: ec2b46bd7c7d03c372c0f626961aafd1bc452374
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "workflow_run" ]; then
             source="${REQUEST_TITLE#rq:t45:}"
             harness="$REQUEST_HARNESS_SHA"
+          elif [ "$EVENT_NAME" = "push" ]; then
+            source="$SEALED_PUSH_SOURCE_SHA"
+            harness="$CURRENT_HARNESS_SHA"
           else
             source="$DISPATCH_SHA"
             harness="$CURRENT_HARNESS_SHA"
@@ -91,7 +99,7 @@ jobs:
           cd "$RUNNER_TEMP/context-memory-membership-routing-source"
           python -m pip install -q -e 'l1[dev]'
 
-      - name: Compile routing modules
+      - name: Compile repaired routing modules
         shell: bash
         run: |
           set -euo pipefail
@@ -99,12 +107,14 @@ jobs:
           python -m py_compile \
             l1/l1_processor/context_memory/membership_routing.py \
             l1/l1_processor/context_memory/membership_model_provider.py \
+            l1/l1_processor/context_memory/membership_kernel.py \
+            l1/l1_processor/context_memory/membership_context.py \
             l1/l1_processor/context_memory/v02_contracts.py \
             l1/l1_processor/context_memory/v02_engine.py \
             l1/l1_processor/context_memory/v02_store.py
           echo 'compile=PASS'
 
-      - name: Run routing and context-memory regression tests
+      - name: Run repaired routing and context-memory regression tests
         shell: bash
         run: |
           set -euo pipefail
