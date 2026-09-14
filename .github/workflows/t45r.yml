@@ -134,14 +134,17 @@ jobs:
               try:
                   root=ET.parse(report).getroot()
                   for case in root.iter('testcase'):
-                      node=case.find('failure') or case.find('error')
-                      if node is None: continue
+                      node=case.find('failure')
+                      if node is None:
+                          node=case.find('error')
+                      if node is None:
+                          continue
                       name=f"{case.attrib.get('classname','')}::{case.attrib.get('name','')}"
                       failed.append(name)
                       body=(node.text or '').strip().splitlines()
-                      diagnostics.append(name+' => '+(' | '.join(body[-2:])[:500] if body else str(node.attrib.get('message',''))[:500]))
+                      diagnostics.append(name+' => '+(' | '.join(body[-4:])[:900] if body else str(node.attrib.get('message',''))[:900]))
               except Exception as exc:
-                  diagnostics.append('junit-parse => '+type(exc).__name__)
+                  diagnostics.append('junit-parse => '+type(exc).__name__+': '+str(exc)[:300])
               print('FAILED_TESTS='+(';'.join(failed) if failed else 'UNAVAILABLE'))
               for item in diagnostics: print('FAIL_DIAG='+item)
               print('pytest_result=FAIL'); print(summary); raise SystemExit(p.returncode)
