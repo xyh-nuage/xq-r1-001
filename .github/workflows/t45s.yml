@@ -1,5 +1,5 @@
 name: t45s-context-memory-membership-routing-deterministic
-run-name: t45s:ec2b46bd7c7d03c372c0f626961aafd1bc452374
+run-name: t45s:92cd76d8b0bbb7548710a55900a6a2c91536dc15
 
 on:
   push:
@@ -22,7 +22,7 @@ jobs:
         shell: bash
         env:
           KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
-          SOURCE_SHA: ec2b46bd7c7d03c372c0f626961aafd1bc452374
+          SOURCE_SHA: 92cd76d8b0bbb7548710a55900a6a2c91536dc15
         run: |
           set -euo pipefail
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 2
@@ -94,7 +94,7 @@ jobs:
         shell: bash
         run: |
           echo 'CONTEXT_MEMORY_MEMBERSHIP_ROUTING_DETERMINISTIC_CI_PASS'
-          echo 'source_sha=ec2b46bd7c7d03c372c0f626961aafd1bc452374'
+          echo 'source_sha=92cd76d8b0bbb7548710a55900a6a2c91536dc15'
           echo 'live_model_calls=0'
           echo 'gold_reference_model_input=0'
           echo 'merge_performed=0'
