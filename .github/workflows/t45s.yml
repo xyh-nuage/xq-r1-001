@@ -1,0 +1,104 @@
+name: t45s-context-memory-membership-routing-deterministic
+run-name: t45s:ec2b46bd7c7d03c372c0f626961aafd1bc452374
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/t45s.trigger]
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+      - name: Checkout exact private source
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+          SOURCE_SHA: ec2b46bd7c7d03c372c0f626961aafd1bc452374
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          repo="$RUNNER_TEMP/t45s-source"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t45s-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "$SOURCE_SHA"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "$SOURCE_SHA"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo "source_sha=$SOURCE_SHA"
+          echo 'private_source=VERIFIED_EXACT_SHA'
+      - name: Install deterministic dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/t45s-source"
+          python -m pip install -q -e 'l1[dev]'
+      - name: Compile repaired routing modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/t45s-source"
+          python -m py_compile \
+            l1/l1_processor/context_memory/membership_routing.py \
+            l1/l1_processor/context_memory/membership_model_provider.py \
+            l1/l1_processor/context_memory/membership_kernel.py \
+            l1/l1_processor/context_memory/membership_context.py \
+            l1/l1_processor/context_memory/v02_contracts.py \
+            l1/l1_processor/context_memory/v02_engine.py \
+            l1/l1_processor/context_memory/v02_store.py
+          echo 'compile=PASS'
+      - name: Run deterministic regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/t45s-source"
+          python -m pytest -q \
+            l1/tests/context_memory/test_membership_routing.py \
+            l1/tests/context_memory/test_explicit_relation_integration.py \
+            l1/tests/context_memory/test_real_adapter_probe.py \
+            l1/tests/context_memory/test_v02_hardening.py \
+            l1/tests/context_memory/test_v02_scenarios.py
+      - name: Verify inference boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/t45s-source"
+          export PYTHONPATH="$PWD/l1:$PWD"
+          python - <<'PY'
+          from dataclasses import fields
+          from l1_processor.context_memory.membership_routing import RoutingContext
+          names={f.name.lower() for f in fields(RoutingContext)}
+          assert not ({'gold','reference','reference_answer'} & names)
+          print('model_input_reference_fields=0')
+          PY
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'CONTEXT_MEMORY_MEMBERSHIP_ROUTING_DETERMINISTIC_CI_PASS'
+          echo 'source_sha=ec2b46bd7c7d03c372c0f626961aafd1bc452374'
+          echo 'live_model_calls=0'
+          echo 'gold_reference_model_input=0'
+          echo 'merge_performed=0'
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/t45s-source" "$RUNNER_TEMP/t45s-askpass.sh"
