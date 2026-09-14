@@ -1,24 +1,33 @@
-# Fresh registration for the sealed t45 deterministic plan; same owner-gated rq45 source and same private-source boundary.
+# Sealed t45 deterministic plan. Prefer the rq45 workflow_run chain, but also
+# accept the same owner-only exact-SHA issue request directly. The direct path
+# avoids GitHub workflow_run registration gaps without changing the private
+# source SHA or widening the trust boundary.
 name: t45r-context-memory-membership-routing-deterministic
-run-name: t45r:${{ github.event.workflow_run.display_title }}
+run-name: t45r:${{ github.event.workflow_run.display_title || github.event.issue.title || 'registration' }}
 
 on:
   workflow_run:
     workflows: [rq45]
     types: [completed]
+  issues:
+    types: [opened, reopened]
 
 permissions:
   contents: read
 
 concurrency:
-  group: remote-t45r-${{ github.event.workflow_run.head_sha || github.run_id }}
+  group: remote-t45r-${{ github.event.workflow_run.head_sha || github.sha || github.run_id }}-${{ github.event.issue.number || github.event.workflow_run.id || github.run_id }}
   cancel-in-progress: false
 
 jobs:
   run:
     if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.display_title, 'rq:t45:')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.display_title, 'rq:t45:')) ||
+      (github.event_name == 'issues' &&
+       github.event.issue.user.login == github.repository_owner &&
+       startsWith(github.event.issue.title, 'rq:t45:'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -26,8 +35,8 @@ jobs:
         id: source
         shell: bash
         env:
-          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
-          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title || github.event.issue.title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           source="${REQUEST_TITLE#rq:t45:}"
@@ -86,6 +95,7 @@ jobs:
             l1/l1_processor/context_memory/membership_routing.py \
             l1/l1_processor/context_memory/membership_model_provider.py \
             l1/l1_processor/context_memory/membership_kernel.py \
+            l1/l1_processor/context_memory/supersession_policy.py \
             l1/l1_processor/context_memory/membership_context.py \
             l1/l1_processor/context_memory/v02_contracts.py \
             l1/l1_processor/context_memory/v02_engine.py \
