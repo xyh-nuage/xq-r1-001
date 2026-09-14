@@ -1,3 +1,4 @@
+# Infrastructure refresh only: re-register sealed t45 workflow; deterministic plan unchanged.
 name: t45-context-memory-membership-routing-deterministic
 run-name: t45:${{ github.event.workflow_run.display_title || inputs.source_sha }}
 
