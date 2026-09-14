@@ -89,7 +89,8 @@ jobs:
             l1/l1_processor/context_memory/membership_context.py \
             l1/l1_processor/context_memory/v02_contracts.py \
             l1/l1_processor/context_memory/v02_engine.py \
-            l1/l1_processor/context_memory/v02_store.py
+            l1/l1_processor/context_memory/v02_store.py \
+            l1/evaluation/context_memory_business_replay/run_replay.py
           echo 'compile=PASS'
 
       - name: Run repaired routing and context-memory regression tests
@@ -102,6 +103,8 @@ jobs:
           report='/tmp/t45r-junit.xml'
           cmd=[sys.executable,'-m','pytest','-q','--junitxml',report,
                'l1/tests/context_memory/test_membership_routing.py',
+               'l1/tests/context_memory/test_membership_prompt_packets.py',
+               'l1/tests/context_memory/test_business_replay_adapter.py',
                'l1/tests/context_memory/test_explicit_relation_integration.py',
                'l1/tests/context_memory/test_real_adapter_probe.py',
                'l1/tests/context_memory/test_v02_hardening.py',
