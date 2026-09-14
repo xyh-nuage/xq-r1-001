@@ -1,3 +1,4 @@
+# Infrastructure refresh only: re-register the existing sealed t44 workflow; execution plan unchanged.
 name: t44-context-memory-explicit-relation-integration
 run-name: t44:${{ github.event.workflow_run.display_title || inputs.source_sha }}
 
