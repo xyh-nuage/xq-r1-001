@@ -1,0 +1,2 @@
+source_sha=ec2b46bd7c7d03c372c0f626961aafd1bc452374
+purpose=CONTEXT-MEMORY-MEMBERSHIP-ROUTING-007 deterministic exact-SHA diagnostic
