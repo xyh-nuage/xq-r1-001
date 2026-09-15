@@ -1,0 +1,32 @@
+name: rq47t
+run-name: ${{ github.event.issue.title || 'rq47t-registration' }}
+
+on:
+  issues:
+    types: [opened, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.event_name == 'issues' && startsWith(github.event.issue.title, 'rq:t47t:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate owner targeted delivery009 request
+        shell: bash
+        env:
+          REQUEST_AUTHOR: ${{ github.event.issue.user.login }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REQUEST_TITLE: ${{ github.event.issue.title }}
+        run: |
+          set -euo pipefail
+          test "$REQUEST_AUTHOR" = "$REPOSITORY_OWNER" || { echo 'request=REJECTED'; exit 2; }
+          if [[ "$REQUEST_TITLE" =~ ^rq:t47t:[0-9a-f]{40}$ ]]; then
+            echo 'request=ACCEPTED'
+          else
+            echo 'request=INVALID'
+            exit 2
+          fi
