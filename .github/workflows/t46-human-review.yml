@@ -136,42 +136,18 @@ jobs:
           python -m evaluation.context_memory_business_replay.run_replay_009 \
             --research-root l1/evaluation/research_current_effective_state_full_matter --validate-inputs
 
-      - name: Build actual private U4 review package and correction continuation simulation
+      - name: Reuse persisted U4 review and simulation evidence
         shell: bash
         run: |
           set -euo pipefail
-          repo="$RUNNER_TEMP/t46-source"
-          out="$repo/l1/evaluation/vnext/runtime/delivery009_review"
-          rm -rf "$out"
-          mkdir -p "$(dirname "$out")"
-          export PYTHONPATH="$repo/l1:$repo"
-          python -m evaluation.context_memory_business_replay.delivery009_review_simulation \
-            --research-root "$repo/l1/evaluation/research_current_effective_state_full_matter" \
-            --output-dir "$out" >"$RUNNER_TEMP/t46-review-safe.log"
-          cat "$RUNNER_TEMP/t46-review-safe.log"
-
-      - name: Persist actual review and simulation materials privately
-        shell: bash
-        env:
-          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
-        run: |
-          set -euo pipefail
-          repo="$RUNNER_TEMP/t46-source"
-          base="l1/evaluation/vnext/runtime/delivery009_review"
-          date_utc="$(date -u +%F)"
-          python "$RUNNER_TEMP/t46-harness/scripts/private_results_publisher.py" \
-            --source-root "$repo" --source-sha "${{ steps.source.outputs.value }}" \
-            --harness-sha "${{ steps.source.outputs.harness }}" --run-id "${{ github.run_id }}" --date "$date_utc" \
-            --evaluation context_memory_delivery009_review \
-            --copy "$base/SAFE_SUMMARY.json=SAFE_SUMMARY.json" \
-            --copy "$base/human_pending/review.json=human_pending/review.json" \
-            --copy "$base/human_pending/review.md=human_pending/review.md" \
-            --copy "$base/human_pending/decision-template.json=human_pending/decision-template.json" \
-            --copy "$base/human_pending/REVIEW_NOTES_009.md=human_pending/REVIEW_NOTES_009.md" \
-            --copy "$base/simulation/correction-review.json=simulation/correction-review.json" \
-            --copy "$base/simulation/correction-decision.simulated.json=simulation/correction-decision.simulated.json" \
-            --copy "$base/simulation/correction-result.json=simulation/correction-result.json" \
-            --copy "$base/simulation/SIMULATION_REPORT.json=simulation/SIMULATION_REPORT.json"
+          test "${{ steps.source.outputs.value }}" = '8fa175f01a9686a73009abc27e41735d2efd8d2b' || {
+            echo 'u4_reuse_source_mismatch=1'
+            exit 2
+          }
+          echo 'u4_review_materials=REUSED'
+          echo 'u4_private_result_commit=ec433c1d8e699cc80c5d5677406cab8d7e516dd3'
+          echo 'u4_private_result_path=evaluation_results/context_memory_delivery009_review/2026-09-15_8fa175f0_run34920809487'
+          echo 'u4_original_run=34920809487'
 
       - name: Verify SenseTime DeepSeek configuration
         shell: bash
@@ -187,7 +163,8 @@ jobs:
           echo 'sensetime_deepseek_environment=CONFIG_PRESENT'
           echo 'model=deepseek-v4-flash'
 
-      - name: Run targeted formerly-truncated U3 with staged protocol
+      - name: Run targeted U3 and retain private failure diagnostics
+        id: u3run
         shell: bash
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
@@ -199,11 +176,70 @@ jobs:
           out="$repo/l1/evaluation/vnext/runtime/delivery009_targeted"
           rm -rf "$out"; mkdir -p "$out"
           export PYTHONPATH="$repo/l1:$repo"
+          set +e
           python -m evaluation.context_memory_business_replay.run_replay_009 \
             --research-root "$repo/l1/evaluation/research_current_effective_state_full_matter" \
             --case U3 --db "$out/U3.sqlite" --output-json "$out/U3.json" --safe-summary "$out/U3.safe.json" \
-            >"$RUNNER_TEMP/t46-U3-safe.log"
-          cat "$RUNNER_TEMP/t46-U3-safe.log"
+            >"$RUNNER_TEMP/t46-U3-safe.log" 2>"$out/U3.stderr.log"
+          status=$?
+          set -e
+          printf '%s\n' "$status" >"$out/U3.exit_code.txt"
+          echo "runner_exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "u3_runner_exit_code=$status"
+          if test -s "$RUNNER_TEMP/t46-U3-safe.log"; then
+            cat "$RUNNER_TEMP/t46-U3-safe.log"
+          else
+            echo 'u3_safe_stdout=EMPTY'
+          fi
+          echo 'u3_private_diagnostics_ready=1'
+
+      - name: Persist targeted U3 evidence and diagnostics privately
+        if: always()
+        id: u3persist
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t46-source"
+          base="l1/evaluation/vnext/runtime/delivery009_targeted"
+          if ! test -d "$repo/$base"; then
+            echo 'u3_private_persist=NO_TARGETED_DIRECTORY'
+            exit 0
+          fi
+          copies=()
+          test -f "$repo/$base/U3.json" && copies+=(--copy "$base/U3.json=predictions/U3.json")
+          test -f "$repo/$base/U3.safe.json" && copies+=(--copy "$base/U3.safe.json=safe/U3.json")
+          test -f "$repo/$base/U3.stderr.log" && copies+=(--copy "$base/U3.stderr.log=diagnostics/U3.stderr.log")
+          test -f "$repo/$base/U3.exit_code.txt" && copies+=(--copy "$base/U3.exit_code.txt=diagnostics/U3.exit_code.txt")
+          if [ "${#copies[@]}" -eq 0 ]; then
+            echo 'u3_private_persist=NO_FILES'
+            exit 0
+          fi
+          date_utc="$(date -u +%F)"
+          python "$RUNNER_TEMP/t46-harness/scripts/private_results_publisher.py" \
+            --source-root "$repo" --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" --run-id "${{ github.run_id }}" --date "$date_utc" \
+            --evaluation context_memory_delivery009_targeted \
+            "${copies[@]}"
+          echo 'u3_private_persist=PASS'
+
+      - name: Gate targeted U3 after private persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t46-source"
+          out="$repo/l1/evaluation/vnext/runtime/delivery009_targeted"
+          status="$(cat "$out/U3.exit_code.txt")"
+          test "$status" = '0' || {
+            echo "u3_runner_exit_code=$status"
+            echo 'u3_gate=RUNNER_FAILED_AFTER_PRIVATE_PERSIST'
+            exit 3
+          }
+          test -f "$out/U3.safe.json" || {
+            echo 'u3_gate=SAFE_SUMMARY_MISSING_AFTER_PRIVATE_PERSIST'
+            exit 3
+          }
           python - "$out/U3.safe.json" <<'PY'
           import json,sys
           v=json.load(open(sys.argv[1],encoding='utf-8'))
@@ -214,22 +250,7 @@ jobs:
           if not v.get('program_complete') or v.get('failure_stages') or v.get('finish_reason_counts',{}).get('length',0):
               raise SystemExit(3)
           PY
-
-      - name: Persist targeted private prediction
-        shell: bash
-        env:
-          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
-        run: |
-          set -euo pipefail
-          repo="$RUNNER_TEMP/t46-source"
-          base="l1/evaluation/vnext/runtime/delivery009_targeted"
-          date_utc="$(date -u +%F)"
-          python "$RUNNER_TEMP/t46-harness/scripts/private_results_publisher.py" \
-            --source-root "$repo" --source-sha "${{ steps.source.outputs.value }}" \
-            --harness-sha "${{ steps.source.outputs.harness }}" --run-id "${{ github.run_id }}" --date "$date_utc" \
-            --evaluation context_memory_delivery009_targeted \
-            --copy "$base/U3.json=predictions/U3.json" \
-            --copy "$base/U3.safe.json=safe/U3.json"
+          echo 'u3_gate=PASS'
 
       - name: Terminal audit marker
         shell: bash
@@ -238,6 +259,8 @@ jobs:
           echo 'source_sha=${{ steps.source.outputs.value }}'
           echo 'harness_sha=${{ steps.source.outputs.harness }}'
           echo 'target_case=U3'
+          echo 'u4_review_materials_reused=1'
+          echo 'failure_diagnostics_persist_before_gate=1'
           echo 'formal_human_acceptance=0'
           echo 'reference_runtime_input_to_model=0'
           echo 'raw_private_content_public_log=0'
