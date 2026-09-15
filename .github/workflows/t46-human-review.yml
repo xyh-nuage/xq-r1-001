@@ -20,7 +20,7 @@ jobs:
       github.event_name == 'workflow_run' &&
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.display_title, 'rq:t46:')
-    environment: deepseek
+    environment: shangtang
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -173,7 +173,7 @@ jobs:
             --copy "$base/simulation/correction-result.json=simulation/correction-result.json" \
             --copy "$base/simulation/SIMULATION_REPORT.json=simulation/SIMULATION_REPORT.json"
 
-      - name: Verify DeepSeek configuration
+      - name: Verify SenseTime DeepSeek configuration
         shell: bash
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
@@ -181,9 +181,10 @@ jobs:
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           set -euo pipefail
-          test -n "$LLM_API_KEY" || exit 2
-          test -n "$LLM_BASE_URL" || exit 2
-          test "$LLM_MODEL" = 'deepseek-v4-flash' || exit 2
+          test -n "$LLM_API_KEY" || { echo 'LLM_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
+          test -n "$LLM_BASE_URL" || { echo 'LLM_BASE_URL=MISSING_NO_MODEL_CALL'; exit 2; }
+          test "$LLM_MODEL" = 'deepseek-v4-flash' || { echo 'LLM_MODEL=UNEXPECTED_NO_MODEL_CALL'; exit 2; }
+          echo 'sensetime_deepseek_environment=CONFIG_PRESENT'
           echo 'model=deepseek-v4-flash'
 
       - name: Run targeted formerly-truncated U3 with staged protocol
