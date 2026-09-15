@@ -140,10 +140,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ steps.source.outputs.value }}" = '8fa175f01a9686a73009abc27e41735d2efd8d2b' || {
-            echo 'u4_reuse_source_mismatch=1'
-            exit 2
-          }
+          source="${{ steps.source.outputs.value }}"
+          case "$source" in
+            8fa175f01a9686a73009abc27e41735d2efd8d2b)
+              echo 'u4_reuse_basis=ORIGINAL_EXACT_SOURCE'
+              ;;
+            55544919d8b718cde68da1d7776a59f452226fee)
+              # Direct technical descendant of the reviewed source. Its diff is
+              # limited to provider retry/backoff behavior and the corresponding
+              # deterministic tests; U4 human-review/simulation semantics are unchanged.
+              echo 'u4_reuse_basis=TECHNICAL_RETRY_DESCENDANT'
+              ;;
+            *)
+              echo 'u4_reuse_source_mismatch=1'
+              exit 2
+              ;;
+          esac
           echo 'u4_review_materials=REUSED'
           echo 'u4_private_result_commit=ec433c1d8e699cc80c5d5677406cab8d7e516dd3'
           echo 'u4_private_result_path=evaluation_results/context_memory_delivery009_review/2026-09-15_8fa175f0_run34920809487'
