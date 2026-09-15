@@ -1,0 +1,237 @@
+name: t47-targeted-context-memory-delivery009
+run-name: t47t:${{ github.event.workflow_run.display_title || 'registration' }}
+
+on:
+  workflow_run:
+    workflows: [rq47t]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-t47t-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.display_title, 'rq:t47t:')
+    environment: deepseek
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Resolve exact private source and harness
+        id: source
+        shell: bash
+        env:
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          source="${REQUEST_TITLE#rq:t47t:}"
+          harness="$REQUEST_HARNESS_SHA"
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source"
+          echo "harness_sha=$harness"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          harness="$RUNNER_TEMP/t47t-harness"
+          git init -q "$harness"
+          git -C "$harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$harness" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$harness" rev-parse HEAD)" = "${{ steps.source.outputs.harness }}"
+
+      - name: Verify private result write access before model calls
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/t47t-harness/scripts/private_results_preflight.py"
+
+      - name: Checkout exact private source
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t47t-source"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t47t-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'private_source=VERIFIED_EXACT_SHA'
+
+      - name: Compile and run deterministic delivery009 regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t47t-source"
+          cd "$repo"
+          python -m pip install -q -e 'l1[dev]'
+          python -m py_compile \
+            l1/l1_processor/context_memory/membership_staged_delivery009.py \
+            l1/evaluation/context_memory_business_replay/run_replay_009.py \
+            l1/evaluation/context_memory_business_replay/delivery009_review_simulation.py
+          junit="$RUNNER_TEMP/t47t-junit.xml"
+          set +e
+          python -m pytest -q --tb=no --junitxml="$junit" \
+            l1/tests/context_memory/test_delivery009_staged_routing.py \
+            l1/tests/context_memory/test_human_review.py \
+            l1/tests/context_memory/test_membership_routing.py \
+            l1/tests/context_memory/test_membership_prompt_packets.py \
+            l1/tests/context_memory/test_business_replay_adapter.py \
+            l1/tests/context_memory/test_explicit_relation_integration.py \
+            l1/tests/context_memory/test_real_adapter_probe.py \
+            l1/tests/context_memory/test_v02_hardening.py \
+            l1/tests/context_memory/test_v02_scenarios.py >/tmp/t47t-pytest.txt 2>&1
+          status=$?
+          set -e
+          python - "$junit" "$status" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root=ET.parse(sys.argv[1]).getroot(); status=int(sys.argv[2])
+          suites=[root] if root.tag=='testsuite' else list(root.findall('testsuite'))
+          vals={k:sum(int(s.attrib.get(k,0)) for s in suites) for k in ('tests','failures','errors','skipped')}
+          print('PYTEST_AUDIT='+','.join(f'{k}={v}' for k,v in vals.items()))
+          if status or vals['failures'] or vals['errors']:
+              failed=[]
+              for s in suites:
+                  for c in s.findall('testcase'):
+                      if c.find('failure') is not None or c.find('error') is not None:
+                          failed.append(f"{c.attrib.get('classname','')}::{c.attrib.get('name','')}")
+              print('FAILED_TESTS='+(','.join(failed) if failed else 'UNAVAILABLE'))
+              raise SystemExit(1)
+          PY
+          export PYTHONPATH="$repo/l1:$repo"
+          python -m evaluation.context_memory_business_replay.run_replay_009 \
+            --research-root l1/evaluation/research_current_effective_state_full_matter --validate-inputs
+
+      - name: Build actual private U4 review package and correction continuation simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t47t-source"
+          out="$repo/l1/evaluation/vnext/runtime/delivery009_review"
+          rm -rf "$out"
+          export PYTHONPATH="$repo/l1:$repo"
+          python -m evaluation.context_memory_business_replay.delivery009_review_simulation \
+            --research-root "$repo/l1/evaluation/research_current_effective_state_full_matter" \
+            --output-dir "$out" >"$out.safe.log"
+          cat "$out.safe.log"
+
+      - name: Persist actual review and simulation materials privately
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t47t-source"
+          base="l1/evaluation/vnext/runtime/delivery009_review"
+          date_utc="$(date -u +%F)"
+          python "$RUNNER_TEMP/t47t-harness/scripts/private_results_publisher.py" \
+            --source-root "$repo" --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" --run-id "${{ github.run_id }}" --date "$date_utc" \
+            --evaluation context_memory_delivery009_review \
+            --copy "$base/SAFE_SUMMARY.json=SAFE_SUMMARY.json" \
+            --copy "$base/human_pending/review.json=human_pending/review.json" \
+            --copy "$base/human_pending/review.md=human_pending/review.md" \
+            --copy "$base/human_pending/decision-template.json=human_pending/decision-template.json" \
+            --copy "$base/human_pending/REVIEW_NOTES_009.md=human_pending/REVIEW_NOTES_009.md" \
+            --copy "$base/simulation/correction-review.json=simulation/correction-review.json" \
+            --copy "$base/simulation/correction-decision.simulated.json=simulation/correction-decision.simulated.json" \
+            --copy "$base/simulation/correction-result.json=simulation/correction-result.json" \
+            --copy "$base/simulation/SIMULATION_REPORT.json=simulation/SIMULATION_REPORT.json"
+
+      - name: Verify DeepSeek configuration
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          test -n "$LLM_API_KEY" || exit 2
+          test -n "$LLM_BASE_URL" || exit 2
+          test "$LLM_MODEL" = 'deepseek-v4-flash' || exit 2
+          echo 'model=deepseek-v4-flash'
+
+      - name: Run targeted formerly-truncated U3 with staged protocol
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t47t-source"
+          out="$repo/l1/evaluation/vnext/runtime/delivery009_targeted"
+          rm -rf "$out"; mkdir -p "$out"
+          export PYTHONPATH="$repo/l1:$repo"
+          python -m evaluation.context_memory_business_replay.run_replay_009 \
+            --research-root "$repo/l1/evaluation/research_current_effective_state_full_matter" \
+            --case U3 --db "$out/U3.sqlite" --output-json "$out/U3.json" --safe-summary "$out/U3.safe.json" \
+            >"$out/U3.stdout.safe.log"
+          cat "$out/U3.stdout.safe.log"
+          python - "$out/U3.safe.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          print('target_case=U3')
+          print('program_complete='+str(bool(v.get('program_complete'))).lower())
+          print('finish_reason_counts='+json.dumps(v.get('finish_reason_counts',{}),sort_keys=True,separators=(',',':')))
+          print('logical_model_calls='+str(v.get('logical_model_calls')))
+          if not v.get('program_complete') or v.get('failure_stages') or v.get('finish_reason_counts',{}).get('length',0):
+              raise SystemExit(3)
+          PY
+
+      - name: Persist targeted private prediction
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t47t-source"; base="l1/evaluation/vnext/runtime/delivery009_targeted"; date_utc="$(date -u +%F)"
+          python "$RUNNER_TEMP/t47t-harness/scripts/private_results_publisher.py" \
+            --source-root "$repo" --source-sha "${{ steps.source.outputs.value }}" --harness-sha "${{ steps.source.outputs.harness }}" \
+            --run-id "${{ github.run_id }}" --date "$date_utc" --evaluation context_memory_delivery009_targeted \
+            --copy "$base/U3.json=predictions/U3.json" --copy "$base/U3.safe.json=safe/U3.json"
+
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'CONTEXT_MEMORY_DELIVERY009_TARGETED_PASS'
+          echo 'source_sha=${{ steps.source.outputs.value }}'
+          echo 'target_case=U3'
+          echo 'formal_human_acceptance=0'
+          echo 'reference_runtime_input_to_model=0'
+          echo 'raw_private_content_public_log=0'
+          echo 'merge_performed=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/t47t-source" "$RUNNER_TEMP/t47t-harness" "$RUNNER_TEMP/t47t-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" /tmp/t47t-*
