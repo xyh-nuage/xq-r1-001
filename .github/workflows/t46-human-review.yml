@@ -208,10 +208,10 @@ jobs:
             exit 0
           fi
           copies=()
-          test -f "$repo/$base/U3.json" && copies+=(--copy "$base/U3.json=predictions/U3.json")
-          test -f "$repo/$base/U3.safe.json" && copies+=(--copy "$base/U3.safe.json=safe/U3.json")
-          test -f "$repo/$base/U3.stderr.log" && copies+=(--copy "$base/U3.stderr.log=diagnostics/U3.stderr.log")
-          test -f "$repo/$base/U3.exit_code.txt" && copies+=(--copy "$base/U3.exit_code.txt=diagnostics/U3.exit_code.txt")
+          test -s "$repo/$base/U3.json" && copies+=(--copy "$base/U3.json=predictions/U3.json")
+          test -s "$repo/$base/U3.safe.json" && copies+=(--copy "$base/U3.safe.json=safe/U3.json")
+          test -s "$repo/$base/U3.stderr.log" && copies+=(--copy "$base/U3.stderr.log=diagnostics/U3.stderr.log")
+          test -s "$repo/$base/U3.exit_code.txt" && copies+=(--copy "$base/U3.exit_code.txt=diagnostics/U3.exit_code.txt")
           if [ "${#copies[@]}" -eq 0 ]; then
             echo 'u3_private_persist=NO_FILES'
             exit 0
