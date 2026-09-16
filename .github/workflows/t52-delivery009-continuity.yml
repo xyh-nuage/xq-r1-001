@@ -1,0 +1,252 @@
+name: t52-delivery009-continuity
+run-name: t52:${{ github.event.workflow_run.display_title || 'registration' }}
+
+on:
+  workflow_run:
+    workflows: [rq52]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-t52-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.display_title, 'rq:t52:')
+    environment: deepseek
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Resolve exact private source and public harness
+        id: source
+        shell: bash
+        env:
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          source="${REQUEST_TITLE#rq:t52:}"
+          harness="$REQUEST_HARNESS_SHA"
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source"
+          echo "harness_sha=$harness"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          harness="$RUNNER_TEMP/t52-harness"
+          git init -q "$harness"
+          git -C "$harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$harness" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$harness" rev-parse HEAD)" = "${{ steps.source.outputs.harness }}"
+
+      - name: Verify private result write access before model calls
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/t52-harness/scripts/private_results_preflight.py"
+
+      - name: Checkout exact private source
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t52-source"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/t52-read-askpass.sh"
+          cat > "$askpass" <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          EOF
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          rm -f "$askpass"
+          unset KNOWLEDGE_READ_TOKEN GIT_ASKPASS
+          echo 'private_source=VERIFIED_EXACT_SHA'
+
+      - name: Compile and run deterministic merged regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t52-source"
+          cd "$repo"
+          python -m pip install -q -e 'l1[dev]'
+          python -m py_compile \
+            l1/l1_processor/context_memory/membership_model_provider.py \
+            l1/l1_processor/context_memory/membership_staged_delivery009.py \
+            l1/evaluation/context_memory_business_replay/run_replay_009.py \
+            l1/evaluation/context_memory_business_replay/run_real_model_continuity_009.py \
+            l1/evaluation/context_memory_business_replay/delivery009_review_simulation.py
+          junit="$RUNNER_TEMP/t52-junit.xml"
+          set +e
+          python -m pytest -q --tb=no --junitxml="$junit" \
+            l1/tests/context_memory/test_membership_provider_backoff.py \
+            l1/tests/context_memory/test_real_model_continuity_offline.py \
+            l1/tests/context_memory/test_delivery009_staged_routing.py \
+            l1/tests/context_memory/test_human_review.py \
+            l1/tests/context_memory/test_membership_routing.py \
+            l1/tests/context_memory/test_membership_prompt_packets.py \
+            l1/tests/context_memory/test_business_replay_adapter.py \
+            l1/tests/context_memory/test_explicit_relation_integration.py \
+            l1/tests/context_memory/test_real_adapter_probe.py \
+            l1/tests/context_memory/test_v02_hardening.py \
+            l1/tests/context_memory/test_v02_scenarios.py \
+            >"$RUNNER_TEMP/t52-pytest.txt" 2>&1
+          status=$?
+          set -e
+          python - "$junit" "$status" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root=ET.parse(sys.argv[1]).getroot(); status=int(sys.argv[2])
+          suites=[root] if root.tag=='testsuite' else list(root.findall('testsuite'))
+          vals={k:sum(int(s.attrib.get(k,0)) for s in suites) for k in ('tests','failures','errors','skipped')}
+          print('PYTEST_AUDIT='+','.join(f'{k}={v}' for k,v in vals.items()))
+          if status or vals['failures'] or vals['errors']:
+              failed=[]
+              for s in suites:
+                  for c in s.findall('testcase'):
+                      if c.find('failure') is not None or c.find('error') is not None:
+                          failed.append(f"{c.attrib.get('classname','')}::{c.attrib.get('name','')}")
+              print('FAILED_TESTS='+(','.join(failed) if failed else 'UNAVAILABLE'))
+              raise SystemExit(1)
+          PY
+          export PYTHONPATH="$repo/l1:$repo"
+          python -m evaluation.context_memory_business_replay.run_replay_009 \
+            --research-root l1/evaluation/research_current_effective_state_full_matter --validate-inputs
+
+      - name: Verify DeepSeek configuration
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          test -n "$LLM_API_KEY" || { echo 'LLM_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
+          test -n "$LLM_BASE_URL" || { echo 'LLM_BASE_URL=MISSING_NO_MODEL_CALL'; exit 2; }
+          test "$LLM_MODEL" = 'deepseek-v4-flash' || { echo 'LLM_MODEL=UNEXPECTED_NO_MODEL_CALL'; exit 2; }
+          echo 'sensetime_deepseek_environment=CONFIG_PRESENT'
+          echo 'model=deepseek-v4-flash'
+
+      - name: Run real-model state continuity and retain private diagnostics
+        id: continuity
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t52-source"
+          out="$repo/l1/evaluation/vnext/runtime/delivery009_continuity"
+          rm -rf "$out"; mkdir -p "$out"
+          export PYTHONPATH="$repo/l1:$repo"
+          set +e
+          python -m evaluation.context_memory_business_replay.run_real_model_continuity_009 \
+            --research-root "$repo/l1/evaluation/research_current_effective_state_full_matter" \
+            --output-dir "$out" \
+            >"$RUNNER_TEMP/t52-continuity-safe.log" 2>"$out/STDERR.log"
+          status=$?
+          set -e
+          printf '%s\n' "$status" >"$out/EXIT_CODE.txt"
+          echo "runner_exit_code=$status" >> "$GITHUB_OUTPUT"
+          echo "continuity_runner_exit_code=$status"
+          if test -s "$RUNNER_TEMP/t52-continuity-safe.log"; then
+            cat "$RUNNER_TEMP/t52-continuity-safe.log"
+          else
+            echo 'continuity_safe_stdout=EMPTY'
+          fi
+          echo 'continuity_private_diagnostics_ready=1'
+
+      - name: Persist continuity evidence and diagnostics privately
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t52-source"
+          base="l1/evaluation/vnext/runtime/delivery009_continuity"
+          test -d "$repo/$base" || { echo 'continuity_private_persist=NO_DIRECTORY'; exit 3; }
+          copies=()
+          test -s "$repo/$base/RUN_REPORT.json" && copies+=(--copy "$base/RUN_REPORT.json=RUN_REPORT.json")
+          test -s "$repo/$base/SUMMARY.md" && copies+=(--copy "$base/SUMMARY.md=SUMMARY.md")
+          test -s "$repo/$base/STATE_BEFORE.json" && copies+=(--copy "$base/STATE_BEFORE.json=STATE_BEFORE.json")
+          test -s "$repo/$base/STATE_AFTER.json" && copies+=(--copy "$base/STATE_AFTER.json=STATE_AFTER.json")
+          test -s "$repo/$base/RAW_NETWORK_CALLS.json" && copies+=(--copy "$base/RAW_NETWORK_CALLS.json=private/RAW_NETWORK_CALLS.json")
+          test -s "$repo/$base/AUDIT_RECORDS.json" && copies+=(--copy "$base/AUDIT_RECORDS.json=private/AUDIT_RECORDS.json")
+          test -s "$repo/$base/STDERR.log" && copies+=(--copy "$base/STDERR.log=diagnostics/STDERR.log")
+          test -s "$repo/$base/EXIT_CODE.txt" && copies+=(--copy "$base/EXIT_CODE.txt=diagnostics/EXIT_CODE.txt")
+          [ "${#copies[@]}" -gt 0 ] || { echo 'continuity_private_persist=NO_FILES'; exit 3; }
+          date_utc="$(date -u +%F)"
+          python "$RUNNER_TEMP/t52-harness/scripts/private_results_publisher.py" \
+            --source-root "$repo" --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" --run-id "${{ github.run_id }}" --date "$date_utc" \
+            --evaluation context_memory_delivery009_continuity \
+            "${copies[@]}"
+          echo 'continuity_private_persist=PASS'
+
+      - name: Gate continuity after private persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/t52-source"
+          out="$repo/l1/evaluation/vnext/runtime/delivery009_continuity"
+          status="$(cat "$out/EXIT_CODE.txt")"
+          test "$status" = '0' || {
+            echo "continuity_runner_exit_code=$status"
+            echo 'continuity_gate=RUNNER_FAILED_AFTER_PRIVATE_PERSIST'
+            exit 3
+          }
+          test -s "$out/RUN_REPORT.json" || { echo 'continuity_gate=RUN_REPORT_MISSING'; exit 3; }
+          python - "$out/RUN_REPORT.json" <<'PY'
+          import json,sys
+          v=json.load(open(sys.argv[1],encoding='utf-8'))
+          print('case_id='+str(v.get('case_id')))
+          print('is_successful='+str(bool(v.get('is_successful'))).lower())
+          print('routing_status='+str(v.get('routing_outcome_status')))
+          print('logical_model_calls='+str(v.get('network_calls_count')))
+          print('total_network_attempts='+str(v.get('total_network_attempts')))
+          print('usage_reported='+str(bool(v.get('usage_reported'))).lower())
+          if not v.get('is_successful') or v.get('routing_outcome_status') != 'ACCEPTED':
+              raise SystemExit(3)
+          PY
+          echo 'continuity_gate=PASS'
+
+      - name: Terminal audit marker
+        shell: bash
+        run: |
+          echo 'CONTEXT_MEMORY_DELIVERY009_CONTINUITY_PASS'
+          echo 'source_sha=${{ steps.source.outputs.value }}'
+          echo 'business_assignment=GIVEN_P1_NOT_RETESTED'
+          echo 'prior_correction=SIMULATED_NOT_FORMAL_HUMAN_ACCEPTANCE'
+          echo 'followup_input=EXPLICITLY_SYNTHETIC'
+          echo 'all_six_cases_claimed=0'
+          echo 'formal_human_acceptance=0'
+          echo 'merge_to_development_branch_performed=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/t52-source" "$RUNNER_TEMP/t52-harness" "$RUNNER_TEMP/t52-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/t52-"*
