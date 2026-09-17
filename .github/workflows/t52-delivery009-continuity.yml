@@ -18,7 +18,7 @@ jobs:
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
       startsWith(github.event.workflow_run.display_title, 'rq:t52:')
-    environment: deepseek
+    environment: shangtang
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
