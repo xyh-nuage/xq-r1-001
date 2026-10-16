@@ -1,0 +1,174 @@
+name: sm9-shallow-memory-t9
+run-name: sm9:${{ github.event.workflow_run.display_title || 'registration' }}
+
+# Shallow-memory T9 rule check (knowledge: docs/realign_20261010/FIRST_ROUND_TASKS.md T9).
+# This repository is public: the log carries counts and pass/fail only. Model inputs, outputs and the
+# report go to the private evaluation-results branch.
+
+on:
+  workflow_run:
+    workflows: [rqsm9]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-sm9-${{ github.event.workflow_run.head_sha || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      startsWith(github.event.workflow_run.display_title, 'rq:sm9:')
+    environment: shangtang
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Resolve exact private source and public harness
+        id: source
+        shell: bash
+        env:
+          REQUEST_TITLE: ${{ github.event.workflow_run.display_title }}
+          REQUEST_HARNESS_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          source="${REQUEST_TITLE#rq:sm9:}"
+          harness="$REQUEST_HARNESS_SHA"
+          [[ "$source" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          [[ "$harness" =~ ^[0-9a-f]{40}$ ]] || exit 2
+          echo "value=$source" >> "$GITHUB_OUTPUT"
+          echo "harness=$harness" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source"
+          echo "harness_sha=$harness"
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Checkout frozen public harness
+        shell: bash
+        run: |
+          set -euo pipefail
+          harness="$RUNNER_TEMP/sm9-harness"
+          git init -q "$harness"
+          git -C "$harness" remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -C "$harness" fetch -q --depth=1 origin "${{ steps.source.outputs.harness }}"
+          git -C "$harness" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$harness" rev-parse HEAD)" = "${{ steps.source.outputs.harness }}"
+
+      - name: Verify private result write access before model calls
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: python "$RUNNER_TEMP/sm9-harness/scripts/private_results_preflight.py"
+
+      - name: Checkout exact private source and rebuild the private workspace
+        shell: bash
+        env:
+          KNOWLEDGE_READ_TOKEN: ${{ secrets.KNOWLEDGE_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/sm9-source"
+          git init -q "$repo"
+          git -C "$repo" remote add origin "https://github.com/xyh-nuage/knowledge.git"
+          askpass="$RUNNER_TEMP/sm9-read-askpass.sh"
+          cat > "$askpass" <<'ASK'
+          #!/bin/sh
+          case "$1" in
+            *Username*) printf '%s\n' x-access-token ;;
+            *Password*) printf '%s\n' "$KNOWLEDGE_READ_TOKEN" ;;
+          esac
+          ASK
+          chmod 700 "$askpass"
+          export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
+          git -C "$repo" fetch -q --depth=1 origin "${{ steps.source.outputs.value }}"
+          git -C "$repo" checkout -q --detach FETCH_HEAD
+          test "$(git -C "$repo" rev-parse HEAD)" = "${{ steps.source.outputs.value }}"
+          echo 'private_source=VERIFIED_EXACT_SHA'
+          python -m pip install -q -e "$repo/l0" -e "$repo/l1[dev]"
+          bash "$RUNNER_TEMP/sm9-harness/scripts/t9_shallow_memory_prepare.sh" "$repo"
+          rm -f "$askpass"
+
+      - name: Run shallow-memory tests and the dry run
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/sm9-source"
+          python -m pytest -q --tb=no shallow_memory/tests 2>&1 | tail -1
+          python -m shallow_memory.t9 --dry-run --out "$RUNNER_TEMP/sm9-dry" --packets workspace/t9_packets
+
+      - name: Verify DeepSeek configuration
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          test -n "$LLM_API_KEY" || { echo 'LLM_API_KEY=MISSING_NO_MODEL_CALL'; exit 2; }
+          test -n "$LLM_BASE_URL" || { echo 'LLM_BASE_URL=MISSING_NO_MODEL_CALL'; exit 2; }
+          test "$LLM_MODEL" = 'deepseek-v4-flash' || { echo 'LLM_MODEL=UNEXPECTED_NO_MODEL_CALL'; exit 2; }
+          echo 'model=deepseek-v4-flash'
+
+      - name: Run T9 with the model
+        shell: bash
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/sm9-source"
+          out="$repo/workspace/t9_run"
+          mkdir -p "$out"
+          cd "$repo"
+          set +e
+          python -m shallow_memory.t9 --out "$out" --packets workspace/t9_packets \
+            >"$RUNNER_TEMP/sm9-safe.log" 2>"$out/STDERR.log"
+          status=$?
+          set -e
+          printf '%s\n' "$status" >"$out/EXIT_CODE.txt"
+          echo "t9_exit_code=$status"
+          if test -s "$RUNNER_TEMP/sm9-safe.log"; then cat "$RUNNER_TEMP/sm9-safe.log"; else echo 't9_safe_stdout=EMPTY'; fi
+
+      - name: Persist T9 results privately
+        shell: bash
+        env:
+          KNOWLEDGE_RESULTS_WRITE_TOKEN: ${{ secrets.KNOWLEDGE_RESULTS_WRITE_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/sm9-source"
+          base="workspace/t9_run"
+          copies=()
+          for f in "$repo/$base"/*; do
+            [ -s "$f" ] || continue  # the publisher rejects empty files
+            name="$(basename "$f")"
+            case "$name" in
+              T9_REPORT.json) copies+=(--copy "$base/$name=$name") ;;
+              STDERR.log|EXIT_CODE.txt) copies+=(--copy "$base/$name=diagnostics/$name") ;;
+              *.input.txt|*.output.json) copies+=(--copy "$base/$name=private/$name") ;;
+            esac
+          done
+          [ "${#copies[@]}" -gt 0 ] || { echo 't9_private_persist=NO_FILES'; exit 3; }
+          python "$RUNNER_TEMP/sm9-harness/scripts/private_results_publisher.py" \
+            --source-root "$repo" --source-sha "${{ steps.source.outputs.value }}" \
+            --harness-sha "${{ steps.source.outputs.harness }}" --run-id "${{ github.run_id }}" --date "$(date -u +%F)" \
+            --evaluation shallow_memory_t9 \
+            "${copies[@]}"
+          echo 't9_private_persist=PASS'
+
+      - name: Gate on runner exit after private persistence
+        shell: bash
+        run: |
+          status="$(cat "$RUNNER_TEMP/sm9-source/workspace/t9_run/EXIT_CODE.txt")"
+          test "$status" = '0' || { echo "t9_gate=RUNNER_FAILED_AFTER_PRIVATE_PERSIST exit=$status"; exit 3; }
+          echo 't9_gate=RUN_COMPLETE'
+          echo 'formal_human_acceptance=0'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/sm9-source" "$RUNNER_TEMP/sm9-harness" "$RUNNER_TEMP/sm9-dry" "$RUNNER_TEMP/sm9-read-askpass.sh" "$RUNNER_TEMP/private-results-publish" "$RUNNER_TEMP/private-results-preflight" "$RUNNER_TEMP/sm9-"*
