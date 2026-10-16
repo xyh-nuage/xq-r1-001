@@ -126,7 +126,7 @@ jobs:
           mkdir -p "$out"
           cd "$repo"
           set +e
-          python -m shallow_memory.t9 --out "$out" --packets workspace/t9_packets \
+          python -m shallow_memory.t9 --out "$out" --packets workspace/t9_packets --budget-minutes 95 \
             >"$RUNNER_TEMP/sm9-safe.log" 2>"$out/STDERR.log"
           status=$?
           set -e
