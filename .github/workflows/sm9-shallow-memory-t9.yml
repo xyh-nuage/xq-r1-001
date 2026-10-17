@@ -19,9 +19,9 @@ concurrency:
 
 jobs:
   run:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' &&
-      startsWith(github.event.workflow_run.display_title, 'rq:sm9:')
+    # Retired 2026-10-17: shallow-memory runs moved to the owner's machine (knowledge shallow_memory/RUNBOOK.md),
+    # and the T9 runner this job calls was removed from the source repository.
+    if: false
     environment: shangtang
     runs-on: ubuntu-latest
     timeout-minutes: 120
